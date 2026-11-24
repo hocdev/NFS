@@ -507,9 +507,9 @@ export component MainWindow inherits Window {
                             height: 42px; border-radius: 8px;
                             background: root.current_view == 3 ? #3b82f6 : (language_nav.has-hover ? #334155 : transparent);
                             language_nav := TouchArea { clicked => { root.current_view = 3; } }
-                            HorizontalLayout { padding-left: 14px; spacing: 12px;
-                                Text { text: "文"; font-size: 17px; color: #cbd5e1; vertical-alignment: center; }
-                                Text { text: "Ngôn ngữ"; font-size: 13px; color: #f1f5f9; vertical-alignment: center; }
+                            HorizontalLayout { padding-left: 14px; padding-right: 14px; spacing: 12px; alignment: start;
+                                Text { width: 16px; horizontal-stretch: 0; text: "文"; font-size: 17px; color: #cbd5e1; vertical-alignment: center; }
+                                Text { horizontal-stretch: 0; text: "Ngôn ngữ"; font-size: 13px; color: #f1f5f9; vertical-alignment: center; }
                             }
                         }
 
@@ -1272,17 +1272,6 @@ export component MainWindow inherits Window {
                     if root.current_view == 2: VerticalLayout {
                         padding: 24px;
                         spacing: 18px;
-
-                        Rectangle {
-                            height: 70px; background: #1e293b; border-radius: 10px;
-                            HorizontalLayout { padding: 14px; spacing: 16px;
-                                VerticalLayout { spacing: 4px;
-                                    Text { text: "Giao diện mặc định: " + root.locale_labels[root.language_index]; color: #f1f5f9; font-size: 13px; }
-                                    Text { text: "Thêm " + root.languages_to_add + " ngôn ngữ mới; ngôn ngữ đã có được bỏ qua."; color: #94a3b8; font-size: 12px; }
-                                }
-                                Button { text: "Chọn ngôn ngữ..."; clicked => { root.current_view = 3; } }
-                            }
-                        }
 
                         // Options Grid
                         HorizontalLayout {

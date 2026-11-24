@@ -143,15 +143,48 @@ fn derive_catalog(bytes: &[u8]) -> String {
             continue;
         }
         let locale = format!("{base}.UTF-8");
-        catalog.insert(locale, (folder.to_string(), display_name(base)));
+        let identification = format!("usr/lib/locale/{folder}/LC_IDENTIFICATION");
+        let fallback = if entries.contains_key(&identification) {
+            identification_name(resolve(&identification, &entries, 0))
+                .unwrap_or_else(|| base.into())
+        } else {
+            base.into()
+        };
+        catalog.insert(locale, (folder.to_string(), display_name(base, &fallback)));
     }
     catalog
         .into_iter()
         .map(|(code, (folder, label))| format!("{code}\t{folder}\t{label}\n"))
         .collect()
 }
+fn usable_name(name: &str) -> bool {
+    !name.trim().is_empty() && !name.to_ascii_lowercase().contains("unknown")
+}
+fn identification_name(data: &[u8]) -> Option<String> {
+    fn item(data: &[u8], index: usize) -> Option<&str> {
+        let count = u32::from_le_bytes(data.get(4..8)?.try_into().ok()?) as usize;
+        if index >= count {
+            return None;
+        }
+        let at = 8 + index * 4;
+        let offset = u32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?) as usize;
+        let tail = data.get(offset..)?;
+        let end = tail.iter().position(|&b| b == 0)?;
+        std::str::from_utf8(&tail[..end]).ok()
+    }
+    let language = item(data, 7)?.trim();
+    let territory = item(data, 8).unwrap_or("").trim();
+    if language.is_empty() {
+        return item(data, 0).filter(|s| usable_name(s)).map(str::to_owned);
+    }
+    Some(if territory.is_empty() {
+        language.into()
+    } else {
+        format!("{language} ({territory})")
+    })
+}
 #[cfg(windows)]
-fn display_name(base: &str) -> String {
+fn display_name(base: &str, fallback: &str) -> String {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetLocaleInfoEx(name: *const u16, kind: u32, data: *mut u16, size: i32) -> i32;
@@ -160,14 +193,19 @@ fn display_name(base: &str) -> String {
     let mut out = [0u16; 256];
     let n = unsafe { GetLocaleInfoEx(tag.as_ptr(), 0x72, out.as_mut_ptr(), out.len() as i32) };
     if n > 1 {
-        String::from_utf16_lossy(&out[..n as usize - 1])
+        let name = String::from_utf16_lossy(&out[..n as usize - 1]);
+        if usable_name(&name) {
+            name
+        } else {
+            fallback.into()
+        }
     } else {
-        base.into()
+        fallback.into()
     }
 }
 #[cfg(not(windows))]
-fn display_name(base: &str) -> String {
-    base.into()
+fn display_name(_base: &str, fallback: &str) -> String {
+    fallback.into()
 }
 pub fn generate(out: &Path) {
     let folder = Path::new("pkg/languages");
@@ -205,6 +243,39 @@ pub fn generate(out: &Path) {
             .filter(|s| s.lines().next() == Some(marker.as_str()))
             .map(|s| s.lines().skip(1).collect::<Vec<_>>().join("\n") + "\n")
             .unwrap_or_else(|| derive_catalog(&bytes));
+        let catalog = if catalog
+            .lines()
+            .filter_map(|l| l.split('\t').nth(2))
+            .any(|label| !usable_name(label))
+        {
+            let derived = derive_catalog(&bytes);
+            let names: BTreeMap<_, _> = derived
+                .lines()
+                .filter_map(|l| {
+                    let mut p = l.split('\t');
+                    Some((p.next()?, p.nth(1)?))
+                })
+                .collect();
+            catalog
+                .lines()
+                .map(|l| {
+                    let mut p = l.split('\t');
+                    let code = p.next().unwrap_or("");
+                    let folder = p.next().unwrap_or("");
+                    let label = p.next().unwrap_or("");
+                    format!(
+                        "{code}\t{folder}\t{}\n",
+                        if usable_name(label) {
+                            label
+                        } else {
+                            names.get(code).copied().unwrap_or(code)
+                        }
+                    )
+                })
+                .collect::<String>()
+        } else {
+            catalog
+        };
         let catalog_file = out.join(format!("locale-catalog-{index}.tsv"));
         std::fs::write(&catalog_file, catalog).expect("Write catalog");
         let payload = path.canonicalize().expect("Dataset path");
@@ -237,5 +308,13 @@ mod tests {
                 .collect::<BTreeMap<_, _>>()
         };
         assert_eq!(keys(&derived), keys(&hint));
+        assert!(derived
+            .lines()
+            .filter_map(|line| line.split('\t').nth(2))
+            .all(usable_name));
+        assert!(hint
+            .lines()
+            .filter_map(|line| line.split('\t').nth(2))
+            .all(usable_name));
     }
 }
