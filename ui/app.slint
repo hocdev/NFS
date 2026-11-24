@@ -112,8 +112,6 @@ export component MainWindow inherits Window {
     in-out property <bool> can_clean_flatpak: false;
     in-out property <string> flatpak_savings: "0 MB";
     in-out property <string> new_release_name: "";
-    in-out property <bool> desktop_refresh: false;
-    in-out property <bool> fast_compression: false;
 
     in-out property <int> build_progress: 0;
     in-out property <string> build_status: "Sẵn sàng";
@@ -125,6 +123,7 @@ export component MainWindow inherits Window {
     in-out property <int> sort_column: 0; // 0: Name, 1: Size
     in-out property <bool> sort_ascending: true;
     in-out property <int> language_index: 0;
+    in-out property <[string]> locale_choices: ["Giữ nguyên"];
     in-out property <string> extra_locales: "";
     in-out property <string> language_deb_paths: "";
     callback add_language_debs();
@@ -143,7 +142,6 @@ export component MainWindow inherits Window {
     callback export_package_clicked(string);
     callback replace_package_clicked(string);
     callback reset_package_clicked(string);
-    callback apply_release_clicked();
 
     VerticalLayout {
         padding: 0px;
@@ -584,7 +582,7 @@ export component MainWindow inherits Window {
                             spacing: 4px;
                             Text {
                                 text: root.current_view == 0 ? "Ứng Dụng & Gói Phần Mềm Trong Hệ Thống" :
-                                      (root.current_view == 1 ? "Quản Lý Gói Cài Đặt Thêm Vào ISO (.deb / .pkg.tar.zst)" :
+                                      (root.current_view == 1 ? "Quản Lý Gói Cài Đặt Thêm Vào ISO (.deb)" :
                                       "Tùy Chọn Hệ Thống & Tiến Trình Đóng Gói ISO");
                                 color: #f8fafc;
                                 font-size: 16px;
@@ -593,7 +591,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: root.current_view == 0 ? "Chọn hoặc bỏ chọn các phần mềm bạn muốn gỡ bỏ để tối ưu dung lượng" :
                                       (root.current_view == 1 ? "Thêm gói mới sẽ được nhúng trực tiếp vào SquashFS và cấu hình tự động" :
-                                      "Ngôn ngữ, dọn dẹp và đóng gói ISO NFS Desktop");
+                                      "Ngôn ngữ, dọn dẹp và đóng gói ISO");
                                 color: #94a3b8;
                                 font-size: 12px;
                             }
@@ -1097,7 +1095,7 @@ export component MainWindow inherits Window {
                                         colorize: #ffffff;
                                     }
                                     Text {
-                                        text: "Thêm gói (.deb / .pkg.tar.zst)...";
+                                        text: "Thêm gói (.deb)...";
                                         color: #ffffff;
                                         font-size: 12px;
                                         font-weight: 600;
@@ -1176,7 +1174,7 @@ export component MainWindow inherits Window {
                                     horizontal-alignment: center;
                                 }
                                 Text {
-                                    text: "Bấm 'Thêm gói' để nạp tệp .deb (Ubuntu/Debian) hoặc .pkg.tar.zst (Arch/CachyOS)";
+                                    text: "Bấm 'Thêm gói' để nạp tệp .deb tương thích với hệ điều hành đang mở";
                                     color: #475569;
                                     font-size: 13px;
                                     horizontal-alignment: center;
@@ -1262,7 +1260,7 @@ export component MainWindow inherits Window {
                                 HorizontalLayout {
                                     Text { text: "Ngôn ngữ mặc định"; color: #f1f5f9; vertical-alignment: center; }
                                     ComboBox {
-                                        model: ["Giữ nguyên", "Tiếng Việt", "English", "中文"];
+                                        model: root.locale_choices;
                                         current-index <=> root.language_index;
                                     }
                                     Button { text: "Thêm gói dịch .deb..."; clicked => { root.add_language_debs(); } }
@@ -1273,7 +1271,7 @@ export component MainWindow inherits Window {
                                     text: "Gói dịch: " + (root.language_deb_paths == "" ? "Dùng bản dịch có sẵn trong ISO" : root.language_deb_paths);
                                     color: #94a3b8; overflow: elide; font-size: 11px;
                                 }
-                                Text { text: "Locale được tạo khi boot lần đầu. Gói .deb cần đúng NFS G240 và đủ phụ thuộc; ứng dụng thiếu bản dịch sẽ dùng ngôn ngữ dự phòng."; color: #fbbf24; wrap: word-wrap; font-size: 11px; }
+                                Text { text: "Locale được tạo khi boot lần đầu. Gói .deb cần đúng hệ điều hành và đủ phụ thuộc; ứng dụng thiếu bản dịch sẽ dùng ngôn ngữ dự phòng."; color: #fbbf24; wrap: word-wrap; font-size: 11px; }
                             }
                         }
 
@@ -1332,61 +1330,11 @@ export component MainWindow inherits Window {
                                         }
                                     }
 
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        alignment: start;
-                                        VerticalLayout {
-                                            alignment: center;
-                                            AppCheckBox {
-                                                checked <=> root.desktop_refresh;
-                                                checked_color: #2563eb;
-                                                unchecked_border: #94a3b8;
-                                            }
-                                        }
-                                        Text {
-                                            text: "Thêm mục 'Refresh' vào menu chuột phải Desktop (KDE Plasma)";
-                                            color: #f1f5f9;
-                                            font-size: 13px;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        alignment: start;
-                                        VerticalLayout {
-                                            alignment: center;
-                                            AppCheckBox {
-                                                checked <=> root.fast_compression;
-                                                checked_color: #2563eb;
-                                                unchecked_border: #94a3b8;
-                                            }
-                                        }
-                                        Text {
-                                            text: "Tối ưu hóa tốc độ ghi ảnh ISO (Nén nhanh)";
-                                            color: #f1f5f9;
-                                            font-size: 13px;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-
                                     Text {
-                                        text: "Đổi tên bản phát hành Linux:";
-                                        color: #cbd5e1;
-                                        font-size: 13px;
-                                        font-weight: 600;
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        LineEdit {
-                                            placeholder-text: "Nhập tên bản phát hành mới...";
-                                            text <=> root.new_release_name;
-                                        }
-                                        Button {
-                                            text: "Áp dụng";
-                                            clicked => { root.apply_release_clicked(); }
-                                        }
+                                        text: "Giữ nguyên bộ nén, block size, quyền Linux và nhận diện hệ điều hành gốc. ISO đầu ra được kiểm tra trước khi công bố.";
+                                        color: #94a3b8;
+                                        wrap: word-wrap;
+                                        font-size: 12px;
                                     }
                                 }
                             }
@@ -1527,7 +1475,7 @@ export component MainWindow inherits Window {
                         }
 
                         Text {
-                            text: "Đã chọn: " + root.selected_count + " gói để gỡ | ISOLite Rust 0.2.0";
+                            text: "Đã chọn: " + root.selected_count + " gói để gỡ | ISOLite Rust 0.3.0";
                             color: #64748b;
                             font-size: 11px;
                             vertical-alignment: center;

@@ -1,24 +1,14 @@
 [package]
 name = "isolite"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-authors = ["ISOLite Contributors"]
-description = "Linux ISO Customization Tool"
+description = "ISO customization in Rust std with Slint UI"
 
 [dependencies]
-slint = "1.18.1"
-backhand = { version = "0.25.5", features = ["xz", "gzip", "zstd", "lz4", "parallel"] }
-tar = "0.4"
-flate2 = "1.0"
-liblzma = "0.4"
-zstd = "0.13"
-crc32fast = "1.4"
-sha2 = "0.10"
-rfd = "0.18.0"
+slint = "=1.18.1"
 
 [build-dependencies]
-slint-build = "1.18.1"
-winres = "0.1"
+slint-build = "=1.18.1"
 
 [profile.release]
 opt-level = 3
@@ -26,6 +16,3 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
-
-[patch.crates-io]
-backhand = { path = "vendor/backhand" }

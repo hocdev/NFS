@@ -2,20 +2,21 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-mod cache;
+mod checksum;
+mod dialog;
 mod engine;
 mod iso;
 mod language;
-mod package;
 mod squash;
 mod types;
+mod xz;
 
 use engine::{build_iso, export_package_files, extract_iso, inspect_iso};
 use types::{DistroType, Image, Package, Plan};
@@ -80,7 +81,14 @@ mod win32_icon {
     pub fn apply_taskbar_icon() {
         unsafe {
             let hinst = GetModuleHandleW(std::ptr::null());
-            let mut icon = LoadImageW(hinst, 1 as *const u16, IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED) as HICON;
+            let mut icon = LoadImageW(
+                hinst,
+                1 as *const u16,
+                IMAGE_ICON,
+                0,
+                0,
+                LR_DEFAULTSIZE | LR_SHARED,
+            ) as HICON;
             if icon.is_null() {
                 icon = LoadIconW(hinst, 1 as *const u16);
             }
@@ -168,7 +176,11 @@ fn apply_package_filter(
             _ => {
                 // Name sort
                 let cmp = a.name.to_lowercase().cmp(&b.name.to_lowercase());
-                if sort_asc { cmp } else { cmp.reverse() }
+                if sort_asc {
+                    cmp
+                } else {
+                    cmp.reverse()
+                }
             }
         }
     });
@@ -178,7 +190,9 @@ fn apply_package_filter(
         let is_selected = selected_removals.contains(&p.name);
         let rep_opt = replaced_folders.get(&p.name);
         let is_rep = rep_opt.is_some();
-        let rep_path = rep_opt.map(|pb| pb.display().to_string()).unwrap_or_default();
+        let rep_path = rep_opt
+            .map(|pb| pb.display().to_string())
+            .unwrap_or_default();
 
         items.push(PackageItem {
             name: p.name.clone().into(),
@@ -199,6 +213,10 @@ fn apply_package_filter(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
+    if args.get(1).is_some_and(|s| s == "--help" || s == "-h") {
+        println!("ISOLite\ninspect <input.iso>\nextract <input.iso> <folder>\nbuild <input.iso> <output.iso> [--locale vi_VN.UTF-8] [--default-locale vi_VN.UTF-8] [--remove package] [--deb file.deb] [--language-deb file.deb]");
+        return Ok(());
+    }
     // CLI Mode
     if args.len() >= 3 {
         let cmd = &args[1];
@@ -206,8 +224,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let p = PathBuf::from(&args[2]);
             let img = inspect_iso(&p, |msg| eprintln!("{}", msg))?;
             println!("Release: {}", img.release);
-            println!("Root filesystem: {} (offset {})", img.squash_iso_path, img.squash_offset);
-            for path in ["usr/lib/os-release", "etc/debian_version", "etc/apt/sources.list"] {
+            println!(
+                "Root filesystem: {} (offset {})",
+                img.squash_iso_path, img.squash_offset
+            );
+            for path in [
+                "usr/lib/os-release",
+                "etc/debian_version",
+                "etc/apt/sources.list",
+            ] {
                 if let Some(bytes) = squash::reader::read_squash_file(&p, img.squash_offset, path) {
                     println!("--- {} ---\n{}", path, String::from_utf8_lossy(&bytes));
                 }
@@ -217,8 +242,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "{}\t{}\t{}\t{}\t{}",
                     p.name,
                     p.version,
-                    if p.protected_package { "protected" } else { "selectable" },
-                    p.installed_kib.map(|k| k.to_string()).unwrap_or_else(|| "-".to_string()),
+                    if p.protected_package {
+                        "protected"
+                    } else {
+                        "selectable"
+                    },
+                    p.installed_kib
+                        .map(|k| k.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
                     p.group
                 );
             }
@@ -246,10 +277,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 default_locale: None,
                 language_debs: Vec::new(),
                 clean_flatpak: false,
-                desktop_installer: false,
-                desktop_refresh: false,
-                original_compression: true,
-                desktop_groups: BTreeSet::new(),
                 replaced_folders: BTreeMap::new(),
             };
 
@@ -266,8 +293,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         i += 1;
                     }
                     "--clean-flatpak" => plan.clean_flatpak = true,
-                    "--desktop-installer" => plan.desktop_installer = true,
-                    "--desktop-refresh" => plan.desktop_refresh = true,
                     "--remove" => {
                         if i + 1 < args.len() {
                             plan.remove.insert(args[i + 1].clone());
@@ -280,7 +305,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             i += 1;
                         }
                     }
-                    _ => {}
+                    _ => return Err(format!("Tùy chọn không hỗ trợ: {}", args[i]).into()),
                 }
                 i += 1;
             }
@@ -316,7 +341,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sort_column = sort_column.clone();
         let sort_ascending = sort_ascending.clone();
         main_window.on_open_iso_clicked(move || {
-            let file_opt = rfd::FileDialog::new()
+            let file_opt = dialog::FileDialog::new()
                 .add_filter("Ảnh đĩa ISO", &["iso"])
                 .pick_file();
 
@@ -366,9 +391,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let replaced_folders_ui = replaced_folders.clone();
 
                             let distro_name = match img.distro {
-                                DistroType::ArchLinux => "Arch / CachyOS",
-                                DistroType::DebianUbuntu => "Debian / Ubuntu",
-                            };
+                                _ => img.distro_name.as_str(),
+                            }
+                            .to_string();
+                            let mut choices = vec!["Giữ nguyên".to_string()];
+                            choices.extend(img.supported_locales.clone());
 
                             let has_flatpak = img.has_flatpak;
                             let flatpak_savings_str = format_bytes(img.flatpak_bytes);
@@ -383,6 +410,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     ui.set_iso_release_text(release_str.clone().into());
                                     ui.set_new_release_name(release_str.into());
                                     ui.set_iso_distro_badge(distro_name.into());
+                                    ui.set_locale_choices(ModelRc::from(Rc::new(VecModel::from(
+                                        choices
+                                            .into_iter()
+                                            .map(slint::SharedString::from)
+                                            .collect::<Vec<_>>(),
+                                    ))));
+                                    ui.set_language_index(0);
                                     ui.set_can_clean_flatpak(has_flatpak);
                                     ui.set_clean_flatpak(false);
                                     ui.set_flatpak_savings(flatpak_savings_str.into());
@@ -394,8 +428,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let pkgs = all_packages_ui.lock().unwrap();
                                     let removals = selected_removals_ui.lock().unwrap();
                                     let reps = replaced_folders_ui.lock().unwrap();
-                                    apply_package_filter(&ui, &pkgs, &removals, &reps, 1, "", 0, true);
-                                    ui.set_status_bar_text("Đã nạp ảnh ISO hoàn tất. Sẵn sàng tùy biến.".into());
+                                    apply_package_filter(
+                                        &ui, &pkgs, &removals, &reps, 1, "", 0, true,
+                                    );
+                                    ui.set_status_bar_text(
+                                        "Đã nạp ảnh ISO hoàn tất. Sẵn sàng tùy biến.".into(),
+                                    );
                                 }
                             });
                         }
@@ -422,7 +460,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         main_window.on_extract_iso_clicked(move || {
             let cur = current_image.lock().unwrap().clone();
             if let Some(img) = cur {
-                let dir_opt = rfd::FileDialog::new().pick_folder();
+                let dir_opt = dialog::FileDialog::new().pick_folder();
                 if let Some(dest_dir) = dir_opt {
                     let ui_weak = ui_weak.clone();
                     std::thread::spawn(move || {
@@ -453,8 +491,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak = ui_handle.clone();
         let staged_debs = staged_debs.clone();
         main_window.on_add_deb_clicked(move || {
-            let files = rfd::FileDialog::new()
-                .add_filter("Gói Linux", &["deb", "zst", "xz", "tar.zst", "tar.xz"])
+            let files = dialog::FileDialog::new()
+                .add_filter("Gói Debian", &["deb"])
                 .pick_files();
 
             if let Some(paths) = files {
@@ -463,7 +501,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 for p in paths {
                     let file_size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-                    let file_name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    let file_name = p
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
                     deb_items.push(AddedPackageItem {
                         name: file_name.clone().into(),
                         file_name: file_name.into(),
@@ -522,7 +564,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         main_window.on_clear_debs_clicked(move || {
             staged_debs.lock().unwrap().clear();
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_added_packages(ModelRc::from(Rc::new(VecModel::from(Vec::<AddedPackageItem>::new()))));
+                ui.set_added_packages(ModelRc::from(Rc::new(VecModel::from(Vec::<
+                    AddedPackageItem,
+                >::new(
+                )))));
             }
         });
     }
@@ -570,7 +615,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let pkgs = all_packages.lock().unwrap();
                 let removals = selected_removals.lock().unwrap();
                 let reps = replaced_folders.lock().unwrap();
-                apply_package_filter(&ui, &pkgs, &removals, &reps, ui.get_package_tab(), &ui.get_search_text(), *c, *a);
+                apply_package_filter(
+                    &ui,
+                    &pkgs,
+                    &removals,
+                    &reps,
+                    ui.get_package_tab(),
+                    &ui.get_search_text(),
+                    *c,
+                    *a,
+                );
             }
         });
     }
@@ -603,7 +657,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let reps = replaced_folders.lock().unwrap();
                         let sc = *sort_column.lock().unwrap();
                         let sa = *sort_ascending.lock().unwrap();
-                        apply_package_filter(&ui, &pkgs, &removals, &reps, ui.get_package_tab(), &ui.get_search_text(), sc, sa);
+                        apply_package_filter(
+                            &ui,
+                            &pkgs,
+                            &removals,
+                            &reps,
+                            ui.get_package_tab(),
+                            &ui.get_search_text(),
+                            sc,
+                            sa,
+                        );
                     }
                 }
             }
@@ -640,7 +703,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let reps = replaced_folders.lock().unwrap();
                 let sc = *sort_column.lock().unwrap();
                 let sa = *sort_ascending.lock().unwrap();
-                apply_package_filter(&ui, &pkgs, &removals, &reps, ui.get_package_tab(), &ui.get_search_text(), sc, sa);
+                apply_package_filter(
+                    &ui,
+                    &pkgs,
+                    &removals,
+                    &reps,
+                    ui.get_package_tab(),
+                    &ui.get_search_text(),
+                    sc,
+                    sa,
+                );
             }
         });
     }
@@ -655,8 +727,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sort_ascending = sort_ascending.clone();
         main_window.on_replace_package_clicked(move |pkg_name| {
             let pkg_str = pkg_name.to_string();
-            let dir_opt = rfd::FileDialog::new()
-                .set_title(&format!("Chọn thư mục chứa tệp thay thế cho gói {}", pkg_str))
+            let dir_opt = dialog::FileDialog::new()
+                .set_title(&format!(
+                    "Chọn thư mục chứa tệp thay thế cho gói {}",
+                    pkg_str
+                ))
                 .pick_folder();
             if let Some(dir) = dir_opt {
                 {
@@ -669,11 +744,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let reps = replaced_folders.lock().unwrap();
                     let sc = *sort_column.lock().unwrap();
                     let sa = *sort_ascending.lock().unwrap();
-                    apply_package_filter(&ui, &pkgs, &removals, &reps, ui.get_package_tab(), &ui.get_search_text(), sc, sa);
+                    apply_package_filter(
+                        &ui,
+                        &pkgs,
+                        &removals,
+                        &reps,
+                        ui.get_package_tab(),
+                        &ui.get_search_text(),
+                        sc,
+                        sa,
+                    );
                     let mut cur_log = ui.get_log_text().to_string();
-                    cur_log += &format!("Đã đặt thư mục thay thế cho {}: {}\n", pkg_str, dir.display());
+                    cur_log += &format!(
+                        "Đã đặt thư mục thay thế cho {}: {}\n",
+                        pkg_str,
+                        dir.display()
+                    );
                     ui.set_log_text(cur_log.into());
-                    ui.set_status_bar_text(format!("Đã gán thư mục thay thế cho gói {}", pkg_str).into());
+                    ui.set_status_bar_text(
+                        format!("Đã gán thư mục thay thế cho gói {}", pkg_str).into(),
+                    );
                 }
             }
         });
@@ -699,7 +789,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let reps = replaced_folders.lock().unwrap();
                 let sc = *sort_column.lock().unwrap();
                 let sa = *sort_ascending.lock().unwrap();
-                apply_package_filter(&ui, &pkgs, &removals, &reps, ui.get_package_tab(), &ui.get_search_text(), sc, sa);
+                apply_package_filter(
+                    &ui,
+                    &pkgs,
+                    &removals,
+                    &reps,
+                    ui.get_package_tab(),
+                    &ui.get_search_text(),
+                    sc,
+                    sa,
+                );
                 let mut cur_log = ui.get_log_text().to_string();
                 cur_log += &format!("Đã hủy thay thế cho gói {}\n", pkg_str);
                 ui.set_log_text(cur_log.into());
@@ -715,7 +814,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         main_window.on_export_package_clicked(move |pkg_name| {
             let cur = current_image.lock().unwrap().clone();
             if let Some(img) = cur {
-                let dest_opt = rfd::FileDialog::new().pick_folder();
+                let dest_opt = dialog::FileDialog::new().pick_folder();
                 if let Some(dest_dir) = dest_opt {
                     let ui_weak = ui_weak.clone();
                     let pkg_str = pkg_name.to_string();
@@ -741,32 +840,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // 9. Apply Release Name
-    {
-        let ui_weak = ui_handle.clone();
-        let current_image = current_image.clone();
-        main_window.on_apply_release_clicked(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                let new_rel = ui.get_new_release_name().to_string();
-                if !new_rel.is_empty() {
-                    ui.set_iso_release_text(new_rel.clone().into());
-                    if let Some(ref mut img) = *current_image.lock().unwrap() {
-                        img.release = new_rel;
-                    }
-                    ui.set_status_bar_text("Đã cập nhật tên bản phát hành mới.".into());
-                }
-            }
-        });
-    }
-
     {
         let weak = ui_handle.clone();
         main_window.on_add_language_debs(move || {
-            if let Some(files) = rfd::FileDialog::new().add_filter("Gói ngôn ngữ NFS G240", &["deb"]).pick_files() {
+            if let Some(files) = dialog::FileDialog::new()
+                .add_filter("Gói ngôn ngữ .deb", &["deb"])
+                .pick_files()
+            {
                 if let Some(ui) = weak.upgrade() {
                     let mut paths = ui.get_language_deb_paths().to_string();
                     for path in files {
-                        if !paths.is_empty() { paths.push('\n'); }
+                        if !paths.is_empty() {
+                            paths.push('\n');
+                        }
                         paths.push_str(&path.to_string_lossy());
                     }
                     ui.set_language_deb_paths(paths.into());
@@ -786,7 +872,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         main_window.on_build_iso_clicked(move || {
             let cur = current_image.lock().unwrap().clone();
             if let Some(img) = cur {
-                let dest_opt = rfd::FileDialog::new()
+                let dest_opt = dialog::FileDialog::new()
                     .add_filter("Ảnh đĩa ISO", &["iso"])
                     .set_file_name("custom-linux.iso")
                     .save_file();
@@ -806,8 +892,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let replace_map = replaced_folders.lock().unwrap().clone();
 
                         let clean_flatpak = ui.get_clean_flatpak();
-                        let desktop_refresh = ui.get_desktop_refresh();
-                        let fast_compression = ui.get_fast_compression();
                         let rel_name = ui.get_iso_release_text().to_string();
 
                         let plan = Plan {
@@ -818,21 +902,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             },
                             remove: remove_set,
                             debs: staged_debs.lock().unwrap().clone(),
-                            locales: ui.get_extra_locales().split(',').map(str::trim)
-                                .filter(|s| !s.is_empty()).map(str::to_owned).collect(),
-                            default_locale: match ui.get_language_index() {
-                                1 => Some("vi_VN.UTF-8".into()),
-                                2 => Some("en_US.UTF-8".into()),
-                                3 => Some("zh_CN.UTF-8".into()),
-                                _ => None,
+                            locales: ui
+                                .get_extra_locales()
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_owned)
+                                .collect(),
+                            default_locale: if ui.get_language_index() > 0 {
+                                ui.get_locale_choices()
+                                    .row_data(ui.get_language_index() as usize)
+                                    .map(|s| s.to_string())
+                            } else {
+                                None
                             },
-                            language_debs: ui.get_language_deb_paths().split('\n')
-                                .filter(|s| !s.is_empty()).map(PathBuf::from).collect(),
+                            language_debs: ui
+                                .get_language_deb_paths()
+                                .split('\n')
+                                .filter(|s| !s.is_empty())
+                                .map(PathBuf::from)
+                                .collect(),
                             clean_flatpak,
-                            desktop_installer: true,
-                            desktop_refresh,
-                            original_compression: !fast_compression,
-                            desktop_groups: BTreeSet::new(),
                             replaced_folders: replace_map,
                         };
 
@@ -875,11 +965,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         Ok(()) => {
                                             ui.set_build_progress(100);
                                             ui.set_build_status("Hoàn tất tạo ISO!".into());
-                                            ui.set_status_bar_text("Tạo ảnh ISO tùy chỉnh thành công!".into());
+                                            ui.set_status_bar_text(
+                                                "Tạo ảnh ISO tùy chỉnh thành công!".into(),
+                                            );
                                         }
                                         Err(e) => {
                                             ui.set_build_status(format!("Lỗi: {}", e).into());
-                                            ui.set_status_bar_text(format!("Đóng gói thất bại: {}", e).into());
+                                            ui.set_status_bar_text(
+                                                format!("Đóng gói thất bại: {}", e).into(),
+                                            );
                                         }
                                     }
                                 }
@@ -937,7 +1031,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if screen_w > win_w && screen_h > win_h {
         let pos_x = (screen_w - win_w) / 2;
         let pos_y = (screen_h - win_h) / 2;
-        main_window.window().set_position(slint::PhysicalPosition::new(pos_x, pos_y));
+        main_window
+            .window()
+            .set_position(slint::PhysicalPosition::new(pos_x, pos_y));
     }
 
     slint::run_event_loop()?;

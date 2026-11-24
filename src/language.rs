@@ -2,17 +2,24 @@ use std::collections::BTreeSet;
 
 /// Only glibc locale identifiers are accepted, never shell fragments.
 pub fn validate_locale(locale: &str) -> Result<(), String> {
-    let base = locale.strip_suffix(".UTF-8").ok_or("Locale phải kết thúc bằng .UTF-8")?;
+    let base = locale
+        .strip_suffix(".UTF-8")
+        .ok_or("Locale phải kết thúc bằng .UTF-8")?;
     let (language, territory) = base.split_once('_').ok_or("Dùng locale như vi_VN.UTF-8")?;
-    if !(2..=3).contains(&language.len()) || !language.bytes().all(|b| b.is_ascii_lowercase())
-        || territory.len() != 2 || !territory.bytes().all(|b| b.is_ascii_uppercase())
+    if !(2..=3).contains(&language.len())
+        || !language.bytes().all(|b| b.is_ascii_lowercase())
+        || territory.len() != 2
+        || !territory.bytes().all(|b| b.is_ascii_uppercase())
     {
         return Err(format!("Locale không hợp lệ: {locale}"));
     }
     Ok(())
 }
 
-pub fn selected_locales(extra: &[String], default: Option<&str>) -> Result<BTreeSet<String>, String> {
+pub fn selected_locales(
+    extra: &[String],
+    default: Option<&str>,
+) -> Result<BTreeSet<String>, String> {
     let mut locales = BTreeSet::new();
     for locale in extra.iter().map(String::as_str).chain(default) {
         validate_locale(locale)?;
@@ -26,7 +33,10 @@ pub fn merge_locale_gen(original: &str, locales: &BTreeSet<String>) -> String {
     let mut output = original.trim_end().to_owned();
     output.push('\n');
     for locale in locales {
-        if !original.lines().any(|line| line.split_whitespace().next() == Some(locale.as_str())) {
+        if !original
+            .lines()
+            .any(|line| line.split_whitespace().next() == Some(locale.as_str()))
+        {
             output.push_str(&format!("{locale} UTF-8\n"));
         }
     }
@@ -36,20 +46,34 @@ pub fn merge_locale_gen(original: &str, locales: &BTreeSet<String>) -> String {
 pub fn language_priority(locale: &str) -> String {
     let base = locale.trim_end_matches(".UTF-8");
     let language = base.split('_').next().unwrap_or("en");
-    if language == "en" { format!("{base}:en") } else { format!("{base}:{language}:en") }
+    if language == "en" {
+        format!("{base}:en")
+    } else {
+        format!("{base}:{language}:en")
+    }
 }
 
 /// Preserve unrelated environment keys and remove LC_ALL so it cannot override LANG.
 pub fn set_language(original: &str, locale: &str) -> String {
     let mut output = String::new();
     for line in original.lines() {
-        let key = line.trim_start().strip_prefix("export ").unwrap_or(line.trim_start())
-            .split('=').next().unwrap_or("");
-        if key == "LANG" || key == "LANGUAGE" || key.starts_with("LC_") { continue; }
+        let key = line
+            .trim_start()
+            .strip_prefix("export ")
+            .unwrap_or(line.trim_start())
+            .split('=')
+            .next()
+            .unwrap_or("");
+        if key == "LANG" || key == "LANGUAGE" || key.starts_with("LC_") {
+            continue;
+        }
         output.push_str(line);
         output.push('\n');
     }
-    output.push_str(&format!("LANG={locale}\nLANGUAGE={}\n", language_priority(locale)));
+    output.push_str(&format!(
+        "LANG={locale}\nLANGUAGE={}\n",
+        language_priority(locale)
+    ));
     output
 }
 
@@ -70,12 +94,18 @@ pub fn patch_boot_config(original: &str, locale: &str) -> String {
             if value.starts_with("locales=") || value.starts_with("locale=") {
                 output.push_str(&format!("locales={locale}{whitespace}"));
                 found = true;
-            } else { output.push_str(token); }
+            } else {
+                output.push_str(token);
+            }
         }
         if !found {
-            if line.ends_with('\n') { output.pop(); }
+            if line.ends_with('\n') {
+                output.pop();
+            }
             output.push_str(&format!(" locales={locale}"));
-            if line.ends_with('\n') { output.push('\n'); }
+            if line.ends_with('\n') {
+                output.push('\n');
+            }
         }
     }
     output
@@ -90,7 +120,14 @@ mod tests {
 
     #[test]
     fn rejects_shell_injection_and_non_utf8() {
-        for bad in ["vi_VN.UTF-8;reboot", "$(id).UTF-8", "../../en_US.UTF-8", "en_US", "en_us.UTF-8", "en_US.UTF-8\n"] {
+        for bad in [
+            "vi_VN.UTF-8;reboot",
+            "$(id).UTF-8",
+            "../../en_US.UTF-8",
+            "en_US",
+            "en_us.UTF-8",
+            "en_US.UTF-8\n",
+        ] {
             assert!(validate_locale(bad).is_err(), "{bad}");
         }
         assert!(validate_locale("vi_VN.UTF-8").is_ok());
@@ -102,8 +139,13 @@ mod tests {
         let generated = merge_locale_gen("zh_CN.UTF-8 UTF-8\n# vi_VN.UTF-8 UTF-8\n", &locales);
         assert!(generated.contains("zh_CN.UTF-8 UTF-8"));
         assert_eq!(generated.matches("\nvi_VN.UTF-8 UTF-8").count(), 1);
-        assert_eq!(set_language("PATH=/bin\nLC_ALL=zh_CN.UTF-8\nexport LANG=zh_CN.UTF-8\n", "vi_VN.UTF-8"),
-                   "PATH=/bin\nLANG=vi_VN.UTF-8\nLANGUAGE=vi_VN:vi:en\n");
+        assert_eq!(
+            set_language(
+                "PATH=/bin\nLC_ALL=zh_CN.UTF-8\nexport LANG=zh_CN.UTF-8\n",
+                "vi_VN.UTF-8"
+            ),
+            "PATH=/bin\nLANG=vi_VN.UTF-8\nLANGUAGE=vi_VN:vi:en\n"
+        );
     }
 
     #[test]

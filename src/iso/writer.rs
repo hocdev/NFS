@@ -1,9 +1,9 @@
+use crate::types::IsoReplacement;
+use crate::xz::Hasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use crc32fast::Hasher;
-use crate::types::IsoReplacement;
 
 pub const ISO_SECTOR: u64 = 2048;
 
@@ -51,13 +51,15 @@ struct Extent {
 }
 
 fn read_at(file: &mut File, offset: u64, buf: &mut [u8]) -> Result<(), String> {
-    file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
     file.read_exact(buf).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 fn write_at(file: &mut File, offset: u64, buf: &[u8]) -> Result<(), String> {
-    file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
     file.write_all(buf).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -111,7 +113,11 @@ fn scan_dir(
             if joliet {
                 let mut j = 0;
                 while j + 1 < name_size {
-                    let c = if rec[33 + j] != 0 { '?' } else { rec[34 + j] as char };
+                    let c = if rec[33 + j] != 0 {
+                        '?'
+                    } else {
+                        rec[34 + j] as char
+                    };
                     name.push(c);
                     j += 2;
                 }
@@ -149,12 +155,17 @@ fn scan_dir(
             let blocks = (file_bytes as u64 + ISO_SECTOR - 1) / ISO_SECTOR;
 
             if blocks != 0 {
-                let movable = (rec[25] & (2 | 128)) == 0 && rec[1] == 0 && rec[26] == 0 && rec[27] == 0;
+                let movable =
+                    (rec[25] & (2 | 128)) == 0 && rec[1] == 0 && rec[26] == 0 && rec[27] == 0;
                 extents.push(Extent {
                     start,
                     end: start + rec[1] as u64 + blocks,
                     path: full_path.clone(),
-                    record: Record { sector: lba, offset, base },
+                    record: Record {
+                        sector: lba,
+                        offset,
+                        base,
+                    },
                     movable,
                 });
             }
@@ -178,7 +189,11 @@ fn scan_dir(
                     pending_entry = Some(edit.entries.len() - 1);
                 }
                 let p_idx = pending_entry.unwrap();
-                edit.entries[p_idx].push(Record { sector: lba, offset, base });
+                edit.entries[p_idx].push(Record {
+                    sector: lba,
+                    offset,
+                    base,
+                });
                 if (rec[25] & 128) == 0 {
                     pending_entry = None;
                 }
@@ -196,126 +211,6 @@ fn scan_dir(
     Ok(())
 }
 
-fn grow_arch_rootfs(
-    output: &mut File,
-    old_end: u64,
-    new_end: u64,
-    source_end: u64,
-    boot_sectors: &BTreeSet<u64>,
-    extents: &mut [Extent],
-    directories: &mut BTreeMap<u64, [u8; ISO_SECTOR as usize]>,
-) -> Result<bool, String> {
-    if new_end <= old_end {
-        return Ok(true);
-    }
-    let delta = new_end - old_end;
-
-    let mut mbr = [0u8; 512];
-    read_at(output, 0, &mut mbr)?;
-    let iso_part = 446;
-    let efi_part = iso_part + 16;
-    let efi_start = read_iso_32(&mbr[efi_part + 8..efi_part + 12]) as u64;
-
-    if mbr[510] != 0x55
-        || mbr[511] != 0xaa
-        || mbr[iso_part] != 0x80
-        || mbr[efi_part + 4] != 0xef
-        || efi_start == 0
-        || efi_start % 4 != 0
-        || efi_start / 4 >= source_end
-        || (read_iso_32(&mbr[iso_part + 8..iso_part + 12]) as u64 + read_iso_32(&mbr[iso_part + 12..iso_part + 16]) as u64) != efi_start
-        || boot_sectors.is_empty()
-    {
-        return Ok(false);
-    }
-
-    let tail_sectors = source_end - old_end;
-    let chunk_size = 8 * 1024 * 1024;
-    let mut shift_buf = vec![0u8; chunk_size];
-    let mut pos = tail_sectors * ISO_SECTOR;
-    while pos > 0 {
-        let count = std::cmp::min(pos, chunk_size as u64) as usize;
-        pos -= count as u64;
-        read_at(output, old_end * ISO_SECTOR + pos, &mut shift_buf[..count])?;
-        write_at(output, (old_end + delta) * ISO_SECTOR + pos, &shift_buf[..count])?;
-    }
-
-    for extent in extents.iter_mut() {
-        if extent.start >= old_end && extent.path != "/arch/x86_64/airootfs.sfs" {
-            extent.start += delta;
-            extent.end += delta;
-            let rec_info = extent.record;
-            let block = directories.get_mut(&rec_info.sector).unwrap();
-            let rec = &mut block[rec_info.offset..];
-            write_iso_both(&mut rec[2..10], (extent.start - rec_info.base) as u32);
-        }
-    }
-
-    for &catalog in boot_sectors {
-        let mut cat_entries = [0u8; ISO_SECTOR as usize];
-        read_at(output, catalog * ISO_SECTOR, &mut cat_entries)?;
-        let mut catalog_changed = false;
-        for p in (32..cat_entries.len()).step_by(32) {
-            if cat_entries[p] == 0x88 {
-                let rba = read_iso_32(&cat_entries[p + 8..p + 12]) as u64;
-                if rba >= old_end {
-                    write_iso_le(&mut cat_entries[p + 8..p + 12], rba + delta, 4);
-                    catalog_changed = true;
-                }
-            }
-        }
-        if catalog_changed {
-            write_at(output, catalog * ISO_SECTOR, &cat_entries)?;
-        }
-    }
-
-    let iso_len = read_iso_32(&mbr[iso_part + 12..iso_part + 16]);
-    write_iso_le(&mut mbr[iso_part + 12..iso_part + 16], iso_len as u64 + delta * 4, 4);
-    let efi_st = read_iso_32(&mbr[efi_part + 8..efi_part + 12]);
-    write_iso_le(&mut mbr[efi_part + 8..efi_part + 12], efi_st as u64 + delta * 4, 4);
-    write_at(output, 0, &mbr)?;
-
-    let mut gpt = [0u8; 512];
-    read_at(output, 512, &mut gpt)?;
-    if &gpt[0..8] == b"EFI PART" {
-        let part_lba = read_iso_64(&gpt[72..80]);
-        let num_parts = read_iso_32(&gpt[80..84]);
-        let entry_size = read_iso_32(&gpt[84..88]) as usize;
-        let part_bytes = num_parts as u64 * entry_size as u64;
-        if part_bytes > 0 && part_bytes <= 1024 * 1024 {
-            let mut parts = vec![0u8; part_bytes as usize];
-            read_at(output, part_lba * 512, &mut parts)?;
-            if num_parts >= 1 {
-                let p1_last = read_iso_64(&parts[40..48]);
-                write_iso_le(&mut parts[40..48], p1_last + delta * 4, 8);
-            }
-            if num_parts >= 3 {
-                let p3 = &mut parts[2 * entry_size..];
-                let p3_first = read_iso_64(&p3[32..40]);
-                let p3_last = read_iso_64(&p3[40..48]);
-                write_iso_le(&mut p3[32..40], p3_first + delta * 4, 8);
-                write_iso_le(&mut p3[40..48], p3_last + delta * 4, 8);
-            }
-            let mut hasher = Hasher::new();
-            hasher.update(&parts);
-            let parts_crc = hasher.finalize();
-            write_iso_le(&mut gpt[88..92], parts_crc as u64, 4);
-            write_at(output, part_lba * 512, &parts)?;
-
-            let new_disk_end = (source_end + delta) * 4;
-            write_iso_le(&mut gpt[32..40], new_disk_end - 1, 8);
-            write_iso_le(&mut gpt[16..20], 0, 4);
-            let mut h_gpt = Hasher::new();
-            h_gpt.update(&gpt[..read_iso_32(&gpt[12..16]) as usize]);
-            let gpt_crc = h_gpt.finalize();
-            write_iso_le(&mut gpt[16..20], gpt_crc as u64, 4);
-            write_at(output, 512, &gpt)?;
-        }
-    }
-
-    Ok(true)
-}
-
 pub fn repack_iso(
     source: &Path,
     target: &Path,
@@ -323,7 +218,8 @@ pub fn repack_iso(
     removals: &[String],
     progress: Option<&dyn Fn(i32, &str)>,
 ) -> Result<(), String> {
-    let source_meta = fs::metadata(source).map_err(|e| format!("Cannot inspect source ISO: {}", e))?;
+    let source_meta =
+        fs::metadata(source).map_err(|e| format!("Cannot inspect source ISO: {}", e))?;
     let source_size = source_meta.len();
     if source_size % ISO_SECTOR != 0 {
         return Err("The source ISO is not sector aligned.".to_string());
@@ -353,7 +249,7 @@ pub fn repack_iso(
                        extents: &mut Vec<Extent>,
                        boot_sectors: &mut BTreeSet<u64>,
                        edits: &mut BTreeMap<String, Edit>,
-                           input: &mut File|
+                       input: &mut File|
      -> Result<(), String> {
         let max_lba = std::cmp::min(base + 64, source_end);
         for lba in base + 16..max_lba {
@@ -447,7 +343,11 @@ pub fn repack_iso(
     const EXTENT_LIMIT: u64 = 0xfffff800;
     let mut erased: BTreeMap<u64, BTreeSet<usize>> = BTreeMap::new();
 
-    let existing_range = |path: &str, edit: &Edit, dirs: &BTreeMap<u64, [u8; ISO_SECTOR as usize]>, ext_list: &[Extent]| -> (u64, u64) {
+    let existing_range = |path: &str,
+                          edit: &Edit,
+                          dirs: &BTreeMap<u64, [u8; ISO_SECTOR as usize]>,
+                          ext_list: &[Extent]|
+     -> (u64, u64) {
         let mut range = (0u64, 0u64);
         for entry in &edit.entries {
             let mut start = 0u64;
@@ -457,7 +357,13 @@ pub fn repack_iso(
                 let lba = record.base + read_iso_32(&rec[2..6]) as u64;
                 let bytes = read_iso_32(&rec[10..14]);
                 let blocks = (bytes as u64 + ISO_SECTOR - 1) / ISO_SECTOR;
-                if rec[1] != 0 || rec[26] != 0 || rec[27] != 0 || blocks == 0 || lba >= source_end || blocks > source_end - lba {
+                if rec[1] != 0
+                    || rec[26] != 0
+                    || rec[27] != 0
+                    || blocks == 0
+                    || lba >= source_end
+                    || blocks > source_end - lba
+                {
                     return (0, 0);
                 }
                 if sectors == 0 {
@@ -492,12 +398,16 @@ pub fn repack_iso(
         }
     }
     let mut written_repl = 0u64;
+    let mut last_progress = -1;
 
     for (path, edit) in &edits {
         if edit.local.as_os_str().is_empty() {
             for entry in &edit.entries {
                 for record in entry {
-                    erased.entry(record.sector).or_default().insert(record.offset);
+                    erased
+                        .entry(record.sector)
+                        .or_default()
+                        .insert(record.offset);
                 }
             }
             continue;
@@ -508,42 +418,23 @@ pub fn repack_iso(
         }
 
         let size = fs::metadata(&edit.local)
-            .map_err(|e| format!("Cannot read replacement file {}: {}", edit.local.display(), e))?
+            .map_err(|e| {
+                format!(
+                    "Cannot read replacement file {}: {}",
+                    edit.local.display(),
+                    e
+                )
+            })?
             .len();
         let sections = std::cmp::max(1, (size + EXTENT_LIMIT - 1) / EXTENT_LIMIT);
         let sectors = (size + ISO_SECTOR - 1) / ISO_SECTOR;
 
-        let rootfs = path == "/arch/x86_64/airootfs.sfs"
-            || path == "/casper/filesystem.squashfs"
-            || path == "/live/filesystem.squashfs";
-        let arch_metadata = path == "/arch/x86_64/airootfs.sha512"
-            || path == "/arch/pkglist.x86_64.txt"
-            || path == "/arch/version";
-
-        let (old_start, old_sectors) = if rootfs || arch_metadata {
-            existing_range(path, edit, &directories, &extents)
-        } else {
-            (0, 0)
-        };
+        let (old_start, old_sectors) = existing_range(path, edit, &directories, &extents);
 
         let mut reuse = false;
         if old_sectors > 0 {
             if sectors <= old_sectors {
                 reuse = true;
-            } else if path == "/arch/x86_64/airootfs.sfs" {
-                let grew = grow_arch_rootfs(
-                    &mut output,
-                    old_start + old_sectors,
-                    old_start + sectors,
-                    source_end,
-                    &boot_sectors,
-                    &mut extents,
-                    &mut directories,
-                )?;
-                if grew {
-                    end = source_end + (old_start + sectors - (old_start + old_sectors));
-                    reuse = true;
-                }
             }
         }
 
@@ -554,19 +445,28 @@ pub fn repack_iso(
 
         for entry in &edit.entries {
             if entry.len() < sections as usize {
-                return Err(format!("The ISO file has too few extents for its replacement: {}", path));
+                return Err(format!(
+                    "The ISO file has too few extents for its replacement: {}",
+                    path
+                ));
             }
             let mut position = 0u64;
             for (i, record) in entry.iter().enumerate() {
                 if i >= sections as usize {
-                    erased.entry(record.sector).or_default().insert(record.offset);
+                    erased
+                        .entry(record.sector)
+                        .or_default()
+                        .insert(record.offset);
                     continue;
                 }
                 let block = directories.get_mut(&record.sector).unwrap();
                 let rec = &mut block[record.offset..];
                 let length = std::cmp::min(size - position, EXTENT_LIMIT);
                 rec[1] = 0;
-                write_iso_both(&mut rec[2..10], (start + position / ISO_SECTOR - record.base) as u32);
+                write_iso_both(
+                    &mut rec[2..10],
+                    (start + position / ISO_SECTOR - record.base) as u32,
+                );
                 write_iso_both(&mut rec[10..18], length as u32);
                 let flag = if i + 1 < sections as usize { 128 } else { 0 };
                 rec[25] = (rec[25] & !128) | flag;
@@ -580,14 +480,19 @@ pub fn repack_iso(
         let mut pos = 0u64;
         while pos < size {
             let count = std::cmp::min(size - pos, buffer.len() as u64) as usize;
-            replacement.read_exact(&mut buffer[..count]).map_err(|e| e.to_string())?;
+            replacement
+                .read_exact(&mut buffer[..count])
+                .map_err(|e| e.to_string())?;
             write_at(&mut output, start * ISO_SECTOR + pos, &buffer[..count])?;
             pos += count as u64;
             written_repl += count as u64;
             if let Some(cb) = progress {
                 if total_repl_bytes > 0 {
                     let p = 85 + ((written_repl * 10) / total_repl_bytes) as i32;
-                    cb(p, "Đang ghi ảnh hệ thống mới vào ISO...");
+                    if p != last_progress {
+                        cb(p, "Đang ghi ảnh hệ thống mới vào ISO...");
+                        last_progress = p;
+                    }
                 }
             }
         }
@@ -651,7 +556,11 @@ pub fn repack_iso(
             let header_size = read_iso_32(&gpt[12..16]) as usize;
             let part_lba = read_iso_64(&gpt[72..80]);
             let part_bytes = read_iso_32(&gpt[80..84]) as u64 * read_iso_32(&gpt[84..88]) as u64;
-            if header_size >= 92 && header_size <= gpt.len() && part_bytes > 0 && part_bytes <= 1024 * 1024 {
+            if header_size >= 92
+                && header_size <= gpt.len()
+                && part_bytes > 0
+                && part_bytes <= 1024 * 1024
+            {
                 let mut parts = vec![0u8; part_bytes as usize];
                 read_at(&mut output, part_lba * 512, &mut parts)?;
                 let part_sectors = (part_bytes + 511) / 512;

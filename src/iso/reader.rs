@@ -62,6 +62,81 @@ impl IsoReader {
         self.image_size
     }
 
+    pub fn files(&mut self) -> Result<Vec<(String, Extent)>, String> {
+        let root = self.root.ok_or("Missing ISO root")?;
+        let mut stack = vec![(String::new(), root)];
+        let mut visited = std::collections::BTreeSet::new();
+        let mut result = Vec::new();
+        while let Some((parent, dir)) = stack.pop() {
+            if !visited.insert(dir.offset) {
+                continue;
+            }
+            if visited.len() > 100000 {
+                return Err("ISO directory limit exceeded".into());
+            }
+            let mut block = [0; 2048];
+            for offset in (0..dir.size).step_by(2048) {
+                if !self.read_at(dir.offset + offset, &mut block) {
+                    return Err("Cannot read ISO directory".into());
+                }
+                let mut pos = 0;
+                while pos < 2048 {
+                    let n = block[pos] as usize;
+                    if n == 0 {
+                        break;
+                    }
+                    if n < 34 || pos + n > 2048 {
+                        return Err("Invalid ISO directory record".into());
+                    }
+                    let rec = &block[pos..pos + n];
+                    pos += n;
+                    let len = rec[32] as usize;
+                    if 33 + len > n {
+                        return Err("Invalid ISO filename".into());
+                    }
+                    if len == 1 && rec[33] < 2 {
+                        continue;
+                    }
+                    let mut name = String::from_utf8_lossy(&rec[33..33 + len])
+                        .trim_end_matches(";1")
+                        .to_string();
+                    let mut p = 33 + len + usize::from(len % 2 == 0);
+                    while p + 4 <= n {
+                        let size = rec[p + 2] as usize;
+                        if size < 4 || p + size > n {
+                            break;
+                        }
+                        if &rec[p..p + 2] == b"NM" && size >= 5 && rec[p + 4] == 0 {
+                            name = String::from_utf8_lossy(&rec[p + 5..p + size]).into_owned();
+                            break;
+                        }
+                        p += size;
+                    }
+                    if name.is_empty()
+                        || name == "."
+                        || name == ".."
+                        || name.contains(['/', '\\', '\0'])
+                    {
+                        return Err("Unsafe ISO path".into());
+                    }
+                    let path = format!("{parent}/{name}");
+                    let extent = Extent {
+                        offset: (read_u32_le(&rec[2..6]) as u64 + rec[1] as u64) * 2048,
+                        size: read_u32_le(&rec[10..14]) as u64,
+                    };
+                    if rec[25] & 2 != 0 {
+                        stack.push((path, extent));
+                    } else if rec[25] & 0x80 != 0 {
+                        return Err("Multi-extent ISO files require a newer reader".into());
+                    } else {
+                        result.push((path, extent));
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> bool {
         if offset > self.image_size || buf.len() as u64 > self.image_size - offset {
             return false;
@@ -215,7 +290,8 @@ impl IsoReader {
         if &header[0..4] != b"hsqs" {
             return 0;
         }
-        let used = read_u32_le(&header[40..44]) as u64 | ((read_u32_le(&header[44..48]) as u64) << 32);
+        let used =
+            read_u32_le(&header[40..44]) as u64 | ((read_u32_le(&header[44..48]) as u64) << 32);
         if used < header.len() as u64 || used > item.size {
             return 0;
         }
@@ -339,7 +415,8 @@ impl IsoReader {
         let root = self.root.ok_or("Cannot find ISO root directory.")?;
         fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
 
-        let mut stack: Vec<(u64, u64, PathBuf)> = vec![(root.offset, root.size, dest_dir.to_path_buf())];
+        let mut stack: Vec<(u64, u64, PathBuf)> =
+            vec![(root.offset, root.size, dest_dir.to_path_buf())];
 
         while let Some((offset, length, cur_dir)) = stack.pop() {
             fs::create_dir_all(&cur_dir).map_err(|e| e.to_string())?;
