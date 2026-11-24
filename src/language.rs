@@ -111,9 +111,6 @@ pub fn patch_boot_config(original: &str, locale: &str) -> String {
     output
 }
 
-pub const SETUP_SCRIPT: &str = include_str!("../pkg/setup-locales.sh");
-pub const SETUP_SERVICE: &str = "[Unit]\nDescription=ISOLite offline language setup\nAfter=local-fs.target\nBefore=display-manager.service\nConditionPathExists=!/var/lib/isolite/locales-ready\n\n[Service]\nType=oneshot\nExecStart=/bin/sh /usr/lib/isolite/setup-locales.sh\nTimeoutStartSec=600\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\n";
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,11 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DistroType {
-    DebianUbuntu = 0,
-}
-
 #[derive(Debug, Clone)]
 pub struct Package {
     pub name: String,
@@ -19,7 +14,6 @@ pub struct Package {
 pub struct Image {
     pub path: PathBuf,
     pub release: String,
-    pub distro: DistroType,
     pub distro_name: String,
     pub supported_locales: Vec<String>,
     pub packages: Vec<Package>,

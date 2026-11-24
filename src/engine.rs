@@ -1,7 +1,7 @@
 use crate::iso::reader::{Extent, IsoReader};
 use crate::iso::writer::repack_iso;
 use crate::squash::native::{Kind, Node, Squash};
-use crate::types::{DistroType, Image, IsoReplacement, Package, Plan};
+use crate::types::{Image, IsoReplacement, Package, Plan};
 use crate::{checksum, language};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -44,9 +44,14 @@ struct Inventory {
     apps: BTreeSet<String>,
     providers: BTreeMap<String, BTreeSet<String>>,
 }
+fn indexed_text(fs: &mut Squash, paths: &BTreeMap<String,Node>, path: &str) -> Option<String> {
+    let node=paths.get(path)?;
+    if matches!(node.kind,Kind::File{..}) {String::from_utf8(fs.read_node(node).ok()?).ok()}
+    else {text(fs,path)}
+}
 fn inventory(fs: &mut Squash, paths: &BTreeMap<String, Node>) -> Result<Inventory> {
     let status =
-        text(fs, "var/lib/dpkg/status").ok_or("ISO không có cơ sở dữ liệu dpkg được hỗ trợ")?;
+        indexed_text(fs, paths, "var/lib/dpkg/status").ok_or("ISO không có cơ sở dữ liệu dpkg được hỗ trợ")?;
     let mut inv = Inventory {
         records: BTreeMap::new(),
         lists: BTreeMap::new(),
@@ -87,10 +92,10 @@ fn inventory(fs: &mut Squash, paths: &BTreeMap<String, Node>) -> Result<Inventor
             inv.protected.insert(name.clone());
         }
         let list_path = format!("var/lib/dpkg/info/{name}.list");
-        let list = text(fs, &list_path)
+        let list = indexed_text(fs, paths, &list_path)
             .or_else(|| {
                 data.get("Architecture")
-                    .and_then(|arch| text(fs, &format!("var/lib/dpkg/info/{name}:{arch}.list")))
+                    .and_then(|arch| indexed_text(fs, paths, &format!("var/lib/dpkg/info/{name}:{arch}.list")))
             })
             .unwrap_or_default();
         let owned: Vec<String> = list
@@ -100,7 +105,7 @@ fn inventory(fs: &mut Squash, paths: &BTreeMap<String, Node>) -> Result<Inventor
             .collect();
         for path in &owned {
             if path.starts_with("usr/share/applications/") && path.ends_with(".desktop") {
-                if let Some(desktop) = text(fs, path) {
+                if let Some(desktop) = indexed_text(fs, paths, path) {
                     if !desktop
                         .lines()
                         .any(|l| matches!(l.trim(), "NoDisplay=true" | "Hidden=true"))
@@ -232,7 +237,6 @@ pub fn inspect_iso<F: Fn(&str)>(path: &Path, log: F) -> Result<Image> {
     Ok(Image {
         path: path.into(),
         release,
-        distro: DistroType::DebianUbuntu,
         distro_name,
         supported_locales,
         packages,
@@ -447,14 +451,18 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             );
             added.insert(
                 "usr/lib/isolite/setup-locales.sh".into(),
-                language::SETUP_SCRIPT.as_bytes().into(),
+                language::SETUP_SCRIPT.replace("\r\n", "\n").into_bytes(),
             );
-            for path in [
-                "etc/systemd/system/isolite-locales.service",
-                "etc/systemd/system/multi-user.target.wants/isolite-locales.service",
-            ] {
-                added.insert(path.into(), language::SETUP_SERVICE.as_bytes().into());
-            }
+            added.insert(
+                "etc/systemd/system/isolite-locales.service".into(),
+                language::SETUP_SERVICE.as_bytes().into(),
+            );
+            // A target drop-in activates the service without replacing vendor
+            // units or fabricating a regular file inside a .wants directory.
+            added.insert(
+                "etc/systemd/system/multi-user.target.d/isolite-locales.conf".into(),
+                b"[Unit]\nWants=isolite-locales.service\n".to_vec(),
+            );
             if paths.contains_key("var/lib/isolite/locales-ready") {
                 removed.insert("var/lib/isolite/locales-ready".into());
             }
@@ -586,6 +594,8 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
                 }
                 let local = stage.join(format!("checksum-{i}"));
                 fs::write(&local, new).map_err(|e| e.to_string())?;
+                // MD5SUMS may itself contain the digest of md5sum.txt.
+                hashes.insert((*path).to_string(), checksum::md5_file(&local)?);
                 replacements.push(IsoReplacement {
                     iso_path: (*path).into(),
                     local,
@@ -661,6 +671,11 @@ fn verify_squash(
         return Err("Thông số SquashFS gốc bị thay đổi".into());
     }
     let current = fs.paths()?;
+    let mut link_counts = BTreeMap::new();
+    for node in current.values() {
+        *link_counts.entry(node.reference).or_insert(0u32) += 1;
+    }
+
     for (path, old) in original {
         let gone = removed
             .iter()
@@ -683,6 +698,12 @@ fn verify_squash(
                     24
                 };
                 expected[16..end].copy_from_slice(&node.raw[16..end]);
+            }
+            let kind = u16::from_le_bytes(old.header[..2].try_into().unwrap());
+            if kind == 9 {
+                expected[40..44].copy_from_slice(&link_counts[&node.reference].to_le_bytes());
+            } else if matches!(kind, 3..=7 | 10..=14) {
+                expected[16..20].copy_from_slice(&link_counts[&node.reference].to_le_bytes());
             }
             if expected != node.raw {
                 return Err(format!("Metadata tệp ngoài kế hoạch thay đổi: {path}"));

@@ -19,7 +19,7 @@ mod types;
 mod xz;
 
 use engine::{build_iso, export_package_files, extract_iso, inspect_iso};
-use types::{DistroType, Image, Package, Plan};
+use types::{Image, Package, Plan};
 
 #[cfg(target_os = "windows")]
 mod win32_icon {
@@ -390,10 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let selected_removals_ui = selected_removals.clone();
                             let replaced_folders_ui = replaced_folders.clone();
 
-                            let distro_name = match img.distro {
-                                _ => img.distro_name.as_str(),
-                            }
-                            .to_string();
+                            let distro_name = img.distro_name.clone();
                             let mut choices = vec!["Giữ nguyên".to_string()];
                             choices.extend(img.supported_locales.clone());
 
@@ -408,7 +405,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     ui.set_iso_loaded(true);
                                     ui.set_iso_path_text(path_str.into());
                                     ui.set_iso_release_text(release_str.clone().into());
-                                    ui.set_new_release_name(release_str.into());
                                     ui.set_iso_distro_badge(distro_name.into());
                                     ui.set_locale_choices(ModelRc::from(Rc::new(VecModel::from(
                                         choices

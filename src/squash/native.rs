@@ -151,13 +151,12 @@ impl Squash {
     fn meta(&mut self, mut position: u64, mut offset: usize, length: usize) -> Result<Vec<u8>> {
         let mut result = Vec::with_capacity(length);
         while result.len() < length {
-            let (block, next) = self.block(position)?;
-            if offset >= block.len() {
-                return Err("Invalid SquashFS metadata offset".into());
-            }
-            let n = (length - result.len()).min(block.len() - offset);
-            result.extend_from_slice(&block[offset..offset + n]);
-            position = next;
+            if !self.cache.contains_key(&position) { self.block(position)?; }
+            let (block,next)=self.cache.get(&position).ok_or("Missing metadata block")?;
+            if offset >= block.len() { return Err("Invalid SquashFS metadata offset".into()); }
+            let n=(length-result.len()).min(block.len()-offset);
+            result.extend_from_slice(&block[offset..offset+n]);
+            position=*next;
             offset = 0;
         }
         Ok(result)
@@ -653,6 +652,19 @@ impl Squash {
                 },
             );
         }
+        let mut final_links = BTreeMap::new();
+        for node in paths.values() {
+            *final_links.entry(node.reference).or_insert(0u32) += 1;
+        }
+        for node in paths.values_mut() {
+            let kind = u16le(&node.header, 0);
+            let count = final_links[&node.reference];
+            if kind == 9 {
+                node.raw[40..44].copy_from_slice(&count.to_le_bytes());
+            } else if matches!(kind, 3..=7 | 10..=14) {
+                node.raw[16..20].copy_from_slice(&count.to_le_bytes());
+            }
+        }
         let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for path in paths.keys().filter(|p| !p.is_empty()) {
             let parent = path.rsplit_once('/').map(|p| p.0).unwrap_or("");
@@ -903,16 +915,19 @@ mod tests {
         image.extend_from_slice(b"hello");
         let inode_start = image.len() as u64;
         let mut file = Vec::new();
-        put16(&mut file, 2);
+        put16(&mut file, 9);
         put16(&mut file, 0o640);
         put16(&mut file, 0);
         put16(&mut file, 0);
         put32(&mut file, 123);
         put32(&mut file, 1);
-        put32(&mut file, 96);
+        put64(&mut file, 96);
+        put64(&mut file, 5);
+        put64(&mut file, 0);
+        put32(&mut file, 2);
         put32(&mut file, u32::MAX);
         put32(&mut file, 0);
-        put32(&mut file, 5);
+        put32(&mut file, u32::MAX);
         put32(&mut file, 5 | (1 << 24));
         let root_ref = file.len() as u64;
         let mut directory = Vec::new();
@@ -981,6 +996,34 @@ mod tests {
             result.read("etc/default/locale").unwrap(),
             b"LANG=vi_VN.UTF-8\n"
         );
+        drop(result);
+        source
+            .overlay(
+                &output,
+                &BTreeMap::new(),
+                &["a".to_owned()].into_iter().collect(),
+            )
+            .unwrap();
+        let mut result = Squash::open(&output, 0).unwrap();
+        assert!(result.find("a").is_err());
+        assert_eq!(result.read("b").unwrap(), b"hello");
+        assert_eq!(u32le(&result.find("b").unwrap().raw, 40), 1);
+        drop(result);
+        source
+            .overlay(
+                &output,
+                &[("a".to_owned(), b"new".to_vec())].into_iter().collect(),
+                &BTreeSet::new(),
+            )
+            .unwrap();
+        let mut result = Squash::open(&output, 0).unwrap();
+        assert_eq!(result.read("a").unwrap(), b"new");
+        assert_eq!(result.read("b").unwrap(), b"hello");
+        assert_ne!(
+            u32le(&result.find("a").unwrap().header, 12),
+            u32le(&result.find("b").unwrap().header, 12)
+        );
+        assert_eq!(u32le(&result.find("b").unwrap().raw, 40), 1);
         drop(result);
         drop(source);
         std::fs::remove_file(input).unwrap();

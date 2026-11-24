@@ -1,0 +1,5 @@
+Vietnamese: Debian locales-all 2.31-13+deb11u11 amd64
+https://archive.debian.org/debian/pool/main/g/glibc/locales-all_2.31-13+deb11u11_amd64.deb
+SHA256 26296003501fdccd66efd63f6bde9884538ac4dd4139af2508f516612725b755
+English: extracted from the original NFS G240 glibc 2.31 locale-archive. SHA256 6a8e9819515d7be31637a756483ab1c2fd25b1becfe97c202ea1faf6543d02eb
+Data only: no executables/shared libraries. Target ABI is checked before applying.

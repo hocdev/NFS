@@ -36,13 +36,13 @@ Trong Tùy chọn, chọn locale mặc định từ danh sách tự phát hiện
 - Giữ các locale cũ, bổ sung vào `locale.gen`.
 - Cập nhật LANG/LANGUAGE và gỡ LC_* mâu thuẫn trong cấu hình môi trường, giữ các khóa khác.
 - Cập nhật tham số locale trên các dòng boot Live/OnlyInstall thực tế trong GRUB/ISOLINUX.
-- Dịch vụ first boot chạy `localedef` có sẵn **trong Linux guest**, trước display manager. Không chạy mã Linux trên Windows.
+- Dịch vụ được kích hoạt bằng drop-in của multi-user.target, không sửa unit của hãng. Dịch vụ first boot chạy `localedef` có sẵn **trong Linux guest**, trước display manager. Không chạy mã Linux trên Windows.
 - Có thể thêm gói dịch `.deb` đúng bản phân phối, kiến trúc và đủ phụ thuộc. Gói được giữ nguyên và cài bằng `dpkg` trong guest để bảo toàn maintainer scripts, symlink, quyền và database. Không tự lấy gói Ubuntu hoặc thay APT sources. Nếu cài/generate thất bại, dịch vụ không ghi marker thành công; xem `journalctl -u isolite-locales`.
 - ISO này đã có định nghĩa locale và nhiều bản dịch tiếng Việt. Chọn locale không tự tạo bản dịch còn thiếu trong phần mềm riêng của hãng; có thể cần gói dịch bổ sung. Trình cài tùy biến/OOBE của hãng cũng cần kiểm thử thực tế.
 
 ## SquashFS và an toàn
 
-Đọc thông số từ superblock, giữ compressor, block size/log, flags, ID table, fragment count, phiên bản và timestamp gốc. Dữ liệu nén của tệp không đổi được tái sử dụng nguyên byte, bố trí lại và cập nhật offset khi đóng gói. Chỉ tệp mới/sửa và các bảng metadata được nén lại bằng XZ/LZMA2 tự triển khai. Giữ quyền, UID/GID, symlink, hard link và xattr; tái tạo bảng directory, inode, fragment và export. Gỡ ứng dụng bỏ dữ liệu không còn được dùng; không xóa thư mục chia sẻ của gói còn lại.
+Đọc thông số từ superblock, giữ compressor, block size/log, flags, ID table, fragment count, phiên bản và timestamp gốc. Dữ liệu nén của tệp không đổi được tái sử dụng nguyên byte, bố trí lại và cập nhật offset khi đóng gói. Chỉ tệp mới/sửa và các bảng metadata được nén lại bằng XZ/LZMA2 tự triển khai. Giữ quyền, UID/GID, symlink, hard link và xattr; tái tạo bảng directory, inode, fragment và export. Gỡ ứng dụng bỏ dữ liệu nguyên block không còn được dùng; không xóa thư mục chia sẻ của gói còn lại. Các block fragment và ID của chúng được giữ để bảo toàn đuôi tệp dùng chung; dung lượng giảm có thể thấp hơn Installed-Size.
 
 “Giống gốc” nghĩa là giữ định dạng/thông số và metadata có ý nghĩa, **không phải cùng hash hoặc byte-for-byte**. Thuật toán chọn match của encoder có thể tạo tỷ lệ nén/kích thước khác mksquashfs gốc. ISO có thể cần mở rộng để chứa nội dung mới.
 
@@ -71,4 +71,4 @@ cargo build --release
 .\target\release\isolite.exe build .\input.iso .\output.iso --remove ten-goi --language-deb .\goi-dich.deb
 ```
 
-Tham chiếu định dạng: [SquashFS trong Linux](https://github.com/torvalds/linux/blob/master/fs/squashfs/squashfs_fs.h), [đặc tả XZ](https://tukaani.org/xz/xz-file-format.txt).
+Tham chiếu định dạng: [SquashFS trong Linux](https://github.com/torvalds/linux/blob/master/fs/squashfs/squashfs_fs.h), [đặc tả XZ](https://tukaani.org/xz/xz-file-format.txt), [systemd unit/drop-in](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html).
