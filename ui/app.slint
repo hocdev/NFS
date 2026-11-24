@@ -1,4 +1,4 @@
-import { Button, ComboBox, CheckBox, LineEdit, ScrollView, ListView, HorizontalBox, VerticalBox } from "std-widgets.slint";
+import { Palette, Button, ComboBox, CheckBox, LineEdit, ScrollView, ListView, HorizontalBox, VerticalBox } from "std-widgets.slint";
 
 export struct PackageItem {
     name: string,
@@ -79,6 +79,7 @@ component AppCheckBox inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
+    init => { Palette.color-scheme = dark; }
     title: "ISOLite - Trình Tùy Biến & Đóng Gói ISO Linux";
     icon: @image-url("icons/app.png");
     preferred-width: 1260px;
@@ -125,6 +126,7 @@ export component MainWindow inherits Window {
     in-out property <[string]> locale_choices: ["Giữ nguyên"];
     in-out property <string> extra_locales: "";
     in-out property <string> language_deb_paths: "";
+    in-out property <int> language_deb_count: 0;
     callback add_language_debs();
 
     // Callbacks to Rust backend
@@ -1250,27 +1252,36 @@ export component MainWindow inherits Window {
                         spacing: 18px;
 
                         Rectangle {
-                            height: 168px;
+                            height: 190px;
                             background: #1e293b;
                             border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #334155;
                             VerticalLayout {
-                                padding: 12px;
-                                spacing: 6px;
+                                padding: 14px;
+                                spacing: 8px;
                                 HorizontalLayout {
-                                    Text { text: "Ngôn ngữ mặc định"; color: #f1f5f9; vertical-alignment: center; }
-                                    ComboBox {
-                                        model: root.locale_choices;
-                                        current-index <=> root.language_index;
-                                    }
-                                    Button { text: "Thêm gói dịch .deb..."; clicked => { root.add_language_debs(); } }
-                                    Button { text: "Xóa gói dịch"; clicked => { root.language_deb_paths = ""; } }
+                                    height: 22px;
+                                    Text { text: "Ngôn ngữ hệ thống"; color: #f1f5f9; font-size: 15px; font-weight: 600; }
+                                    Text { text: "Tích hợp trực tiếp vào ISO"; color: #34d399; font-size: 12px; horizontal-alignment: right; }
                                 }
-                                LineEdit { text <=> root.extra_locales; placeholder-text: "Locale bổ sung, cách nhau bằng dấu phẩy: vi_VN.UTF-8,en_US.UTF-8"; }
-                                Text {
-                                    text: "Gói dịch: " + (root.language_deb_paths == "" ? "Dùng bản dịch có sẵn trong ISO" : root.language_deb_paths);
-                                    color: #94a3b8; overflow: elide; font-size: 11px;
+                                HorizontalLayout {
+                                    height: 36px;
+                                    spacing: 10px;
+                                    Text { width: 144px; text: "Ngôn ngữ mặc định"; color: #cbd5e1; vertical-alignment: center; font-size: 13px; }
+                                    ComboBox { width: 225px; height: 36px; model: root.locale_choices; current-index <=> root.language_index; enabled: root.iso_loaded && !root.is_building; }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                    Button { text: "Thêm bản dịch .deb..."; height: 36px; enabled: !root.is_building; clicked => { root.add_language_debs(); } }
+                                    Button { text: "Xóa lựa chọn"; height: 36px; enabled: root.language_deb_paths != "" && !root.is_building; clicked => { root.language_deb_paths = ""; root.language_deb_count = 0; } }
                                 }
-                                Text { text: "Locale được tạo khi boot lần đầu. Gói .deb cần đúng hệ điều hành và đủ phụ thuộc; ứng dụng thiếu bản dịch sẽ dùng ngôn ngữ dự phòng."; color: #fbbf24; wrap: word-wrap; font-size: 11px; }
+                                HorizontalLayout {
+                                    height: 34px;
+                                    spacing: 10px;
+                                    Text { width: 144px; text: "Locale bổ sung"; color: #cbd5e1; vertical-alignment: center; font-size: 13px; }
+                                    LineEdit { text <=> root.extra_locales; placeholder-text: "Ví dụ: vi_VN.UTF-8, en_US.UTF-8"; enabled: !root.is_building; }
+                                }
+                                Text { text: root.language_deb_count == 0 ? "Dùng dữ liệu có sẵn trong ISO và bộ locale Việt / Anh đi kèm phù hợp." : "Đã chọn " + root.language_deb_count + " gói bản dịch để trích xuất trực tiếp."; color: #94a3b8; font-size: 12px; overflow: elide; }
+                                Text { text: "Không cài gói ngôn ngữ hoặc tạo locale khi khởi động. Phần mềm cần có bản dịch tương ứng."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
                             }
                         }
 
@@ -1474,7 +1485,7 @@ export component MainWindow inherits Window {
                         }
 
                         Text {
-                            text: "Đã chọn: " + root.selected_count + " gói để gỡ | ISOLite Rust 0.3.0";
+                            text: "Đã chọn: " + root.selected_count + " gói để gỡ | ISOLite Rust 0.4.0";
                             color: #64748b;
                             font-size: 11px;
                             vertical-alignment: center;

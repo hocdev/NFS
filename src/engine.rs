@@ -44,14 +44,17 @@ struct Inventory {
     apps: BTreeSet<String>,
     providers: BTreeMap<String, BTreeSet<String>>,
 }
-fn indexed_text(fs: &mut Squash, paths: &BTreeMap<String,Node>, path: &str) -> Option<String> {
-    let node=paths.get(path)?;
-    if matches!(node.kind,Kind::File{..}) {String::from_utf8(fs.read_node(node).ok()?).ok()}
-    else {text(fs,path)}
+fn indexed_text(fs: &mut Squash, paths: &BTreeMap<String, Node>, path: &str) -> Option<String> {
+    let node = paths.get(path)?;
+    if matches!(node.kind, Kind::File { .. }) {
+        String::from_utf8(fs.read_node(node).ok()?).ok()
+    } else {
+        text(fs, path)
+    }
 }
 fn inventory(fs: &mut Squash, paths: &BTreeMap<String, Node>) -> Result<Inventory> {
-    let status =
-        indexed_text(fs, paths, "var/lib/dpkg/status").ok_or("ISO không có cơ sở dữ liệu dpkg được hỗ trợ")?;
+    let status = indexed_text(fs, paths, "var/lib/dpkg/status")
+        .ok_or("ISO không có cơ sở dữ liệu dpkg được hỗ trợ")?;
     let mut inv = Inventory {
         records: BTreeMap::new(),
         lists: BTreeMap::new(),
@@ -94,8 +97,9 @@ fn inventory(fs: &mut Squash, paths: &BTreeMap<String, Node>) -> Result<Inventor
         let list_path = format!("var/lib/dpkg/info/{name}.list");
         let list = indexed_text(fs, paths, &list_path)
             .or_else(|| {
-                data.get("Architecture")
-                    .and_then(|arch| indexed_text(fs, paths, &format!("var/lib/dpkg/info/{name}:{arch}.list")))
+                data.get("Architecture").and_then(|arch| {
+                    indexed_text(fs, paths, &format!("var/lib/dpkg/info/{name}:{arch}.list"))
+                })
             })
             .unwrap_or_default();
         let owned: Vec<String> = list
@@ -149,6 +153,10 @@ fn inventory(fs: &mut Squash, paths: &BTreeMap<String, Node>) -> Result<Inventor
     Ok(inv)
 }
 pub fn inspect_iso<F: Fn(&str)>(path: &Path, log: F) -> Result<Image> {
+    if let Some(image) = crate::scan_cache::load(path) {
+        log("Đã nạp danh sách gói từ cache đã đối chiếu ISO.");
+        return Ok(image);
+    }
     log("Đang nhận diện SquashFS và thông tin hệ điều hành từ ISO...");
     let mut iso = IsoReader::new(path).map_err(|e| e.to_string())?;
     let files = iso.files()?;
@@ -216,13 +224,32 @@ pub fn inspect_iso<F: Fn(&str)>(path: &Path, log: F) -> Result<Image> {
             installed_kib: data.get("Installed-Size").and_then(|s| s.parse().ok()),
         });
     }
-    let supported_locales = paths
-        .keys()
-        .filter_map(|p| p.strip_prefix("usr/share/i18n/locales/"))
-        .filter(|p| !p.contains('/'))
-        .map(|base| format!("{base}.UTF-8"))
-        .filter(|l| language::validate_locale(l).is_ok())
+    let abi = inv
+        .records
+        .get("libc6")
+        .and_then(|r| r.get("Version"))
+        .and_then(|v| crate::language_payload::glibc_abi(v))
+        .unwrap_or_default();
+    let mut available: BTreeSet<String> = fs
+        .read("usr/lib/locale/locale-archive")
+        .ok()
+        .map(|b| crate::language_payload::archived_locales(&b))
+        .unwrap_or_default()
+        .into_iter()
         .collect();
+    available.extend(crate::language_payload::bundled_locales(&abi));
+    for path in paths.keys() {
+        if let Some(base) = path
+            .strip_prefix("usr/lib/locale/")
+            .and_then(|p| p.strip_suffix("/LC_CTYPE"))
+        {
+            let name = base.replace(".utf8", ".UTF-8");
+            if language::validate_locale(&name).is_ok() {
+                available.insert(name);
+            }
+        }
+    }
+    let supported_locales = available.into_iter().collect();
     let flatpak_bytes = paths
         .iter()
         .filter(|(p, _)| p.starts_with("var/lib/flatpak/"))
@@ -234,7 +261,7 @@ pub fn inspect_iso<F: Fn(&str)>(path: &Path, log: F) -> Result<Image> {
             }
         })
         .sum();
-    Ok(Image {
+    let image = Image {
         path: path.into(),
         release,
         distro_name,
@@ -244,7 +271,9 @@ pub fn inspect_iso<F: Fn(&str)>(path: &Path, log: F) -> Result<Image> {
         flatpak_bytes,
         squash_offset,
         squash_iso_path,
-    })
+    };
+    crate::scan_cache::save(&image);
+    Ok(image)
 }
 pub fn extract_iso<F: Fn(&str)>(path: &Path, dest: &Path, log: F) -> Result<()> {
     log("Đang trích xuất ISO...");
@@ -322,10 +351,7 @@ fn stage_packages(
         if !bytes.starts_with(b"!<arch>\n") || path.extension().is_none_or(|s| s != "deb") {
             return Err(format!("Chỉ hỗ trợ gói Debian .deb: {}", path.display()));
         }
-        added.insert(
-            format!("usr/share/isolite/language-packs/{i:04}.deb"),
-            bytes,
-        );
+        added.insert(format!("usr/share/isolite/packages/{i:04}.deb"), bytes);
     }
     Ok(())
 }
@@ -423,49 +449,48 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             log(&format!("Áp dụng tệp thay thế: {name}"));
             collect_overlay(folder, folder, &mut added)?;
         }
-        stage_packages(
-            plan.debs.iter().chain(plan.language_debs.iter()).cloned(),
+        stage_packages(plan.debs.iter().cloned(), &mut added)?;
+        let abi = inv
+            .records
+            .get("libc6")
+            .and_then(|r| r.get("Version"))
+            .and_then(|v| crate::language_payload::glibc_abi(v))
+            .unwrap_or_default();
+        crate::language_payload::integrate(
+            &mut squash,
+            &paths,
+            &abi,
+            &locales,
+            &plan.language_debs,
             &mut added,
         )?;
-        let configure =
-            !locales.is_empty() || !plan.debs.is_empty() || !plan.language_debs.is_empty();
-        if configure {
-            for locale in &locales {
-                let base = locale.trim_end_matches(".UTF-8");
-                if !paths.contains_key(&format!("usr/share/i18n/locales/{base}")) {
-                    return Err(format!("ISO thiếu định nghĩa locale {base}"));
+        if !locales.is_empty() || !plan.language_debs.is_empty() {
+            for legacy in [
+                "usr/lib/isolite/setup-locales.sh",
+                "usr/share/isolite/locales",
+                "var/lib/isolite/locales-ready",
+                "etc/systemd/system/isolite-locales.service",
+                "etc/systemd/system/multi-user.target.wants/isolite-locales.service",
+                "etc/systemd/system/multi-user.target.d/isolite-locales.conf",
+            ] {
+                if paths.contains_key(legacy) {
+                    removed.insert(legacy.to_string());
                 }
             }
-            let old = text(&mut squash, "etc/locale.gen").unwrap_or_default();
+            let old = indexed_text(&mut squash, &paths, "etc/locale.gen").unwrap_or_default();
             added.insert(
                 "etc/locale.gen".into(),
                 language::merge_locale_gen(&old, &locales).into_bytes(),
             );
+            log("Đã tích hợp trực tiếp dữ liệu locale/bản dịch vào root filesystem; không có bước cài ngôn ngữ lúc boot.");
+        }
+        if !plan.debs.is_empty() {
+            added.insert("usr/lib/isolite/setup-packages.sh".into(),b"#!/bin/sh\nset -eu\nexport DEBIAN_FRONTEND=noninteractive\ndpkg -i /usr/share/isolite/packages/*.deb\n".to_vec());
+            added.insert("etc/systemd/system/isolite-packages.service".into(),b"[Unit]\nDescription=ISOLite optional packages\nAfter=local-fs.target\nBefore=display-manager.service\n[Service]\nType=oneshot\nExecStart=/bin/sh /usr/lib/isolite/setup-packages.sh\n".to_vec());
             added.insert(
-                "usr/share/isolite/locales".into(),
-                format!(
-                    "{}\n",
-                    locales.iter().cloned().collect::<Vec<_>>().join("\n")
-                )
-                .into_bytes(),
+                "etc/systemd/system/multi-user.target.d/isolite-packages.conf".into(),
+                b"[Unit]\nWants=isolite-packages.service\n".to_vec(),
             );
-            added.insert(
-                "usr/lib/isolite/setup-locales.sh".into(),
-                language::SETUP_SCRIPT.replace("\r\n", "\n").into_bytes(),
-            );
-            added.insert(
-                "etc/systemd/system/isolite-locales.service".into(),
-                language::SETUP_SERVICE.as_bytes().into(),
-            );
-            // A target drop-in activates the service without replacing vendor
-            // units or fabricating a regular file inside a .wants directory.
-            added.insert(
-                "etc/systemd/system/multi-user.target.d/isolite-locales.conf".into(),
-                b"[Unit]\nWants=isolite-locales.service\n".to_vec(),
-            );
-            if paths.contains_key("var/lib/isolite/locales-ready") {
-                removed.insert("var/lib/isolite/locales-ready".into());
-            }
         }
         if let Some(locale) = &plan.default_locale {
             for path in ["etc/default/locale", "etc/locale.conf", "etc/environment"] {

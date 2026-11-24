@@ -14,6 +14,8 @@ mod dialog;
 mod engine;
 mod iso;
 mod language;
+mod language_payload;
+mod scan_cache;
 mod squash;
 mod types;
 mod xz;
@@ -851,6 +853,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         paths.push_str(&path.to_string_lossy());
                     }
+                    ui.set_language_deb_count(paths.lines().count() as i32);
                     ui.set_language_deb_paths(paths.into());
                 }
             }

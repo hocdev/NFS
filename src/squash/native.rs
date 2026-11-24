@@ -151,12 +151,16 @@ impl Squash {
     fn meta(&mut self, mut position: u64, mut offset: usize, length: usize) -> Result<Vec<u8>> {
         let mut result = Vec::with_capacity(length);
         while result.len() < length {
-            if !self.cache.contains_key(&position) { self.block(position)?; }
-            let (block,next)=self.cache.get(&position).ok_or("Missing metadata block")?;
-            if offset >= block.len() { return Err("Invalid SquashFS metadata offset".into()); }
-            let n=(length-result.len()).min(block.len()-offset);
-            result.extend_from_slice(&block[offset..offset+n]);
-            position=*next;
+            if !self.cache.contains_key(&position) {
+                self.block(position)?;
+            }
+            let (block, next) = self.cache.get(&position).ok_or("Missing metadata block")?;
+            if offset >= block.len() {
+                return Err("Invalid SquashFS metadata offset".into());
+            }
+            let n = (length - result.len()).min(block.len() - offset);
+            result.extend_from_slice(&block[offset..offset + n]);
+            position = *next;
             offset = 0;
         }
         Ok(result)
