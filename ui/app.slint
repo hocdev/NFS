@@ -119,6 +119,7 @@ export component MainWindow inherits Window {
     in-out property <bool> clean_flatpak: false;
     in-out property <bool> can_clean_flatpak: false;
     in-out property <string> flatpak_savings: "0 MB";
+    in-out property <bool> remove_updatepool_office: true;
 
     in-out property <int> build_progress: 0;
     in-out property <string> build_status: "Sẵn sàng";
@@ -1306,6 +1307,43 @@ export component MainWindow inherits Window {
                                         }
                                     }
 
+                                    VerticalLayout {
+                                        spacing: 6px;
+                                        Text {
+                                            text: "Tên bản phát hành hệ điều hành (Release Name):";
+                                            color: #cbd5e1;
+                                            font-size: 13px;
+                                            font-weight: 600;
+                                        }
+                                        LineEdit {
+                                            text <=> root.iso_release_text;
+                                            enabled: root.iso_loaded;
+                                            placeholder-text: "Nhập tên bản phát hành mới...";
+                                            font-size: 13px;
+                                            height: 36px;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            AppCheckBox {
+                                                checked <=> root.remove_updatepool_office;
+                                                enabled: root.iso_loaded;
+                                                checked_color: #2563eb;
+                                                unchecked_border: #94a3b8;
+                                            }
+                                        }
+                                        Text {
+                                            text: "Xoá bộ cài WPS Office và Foxit từ updatepool trong ISO (Tiết kiệm ~711 MB)";
+                                            color: root.iso_loaded ? #f1f5f9 : #64748b;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
                                     HorizontalLayout {
                                         spacing: 8px;
                                         alignment: start;
@@ -1329,7 +1367,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     Text {
-                                        text: "Giữ nguyên bộ nén, block size, quyền Linux và nhận diện hệ điều hành gốc. ISO đầu ra được kiểm tra trước khi công bố.";
+                                        text: "Tự động cập nhật /etc/os-release, boot menu, md5sum và cấu trúc ISO. Bộ nén, quyền Linux và metadata hệ thống được đảm bảo nguyên vẹn.";
                                         color: #94a3b8;
                                         wrap: word-wrap;
                                         font-size: 12px;

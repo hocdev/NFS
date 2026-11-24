@@ -34,10 +34,13 @@ pub struct Record {
     pub base: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Edit {
     local: std::path::PathBuf,
+    is_removed: bool,
     entries: Vec<Vec<Record>>,
+    old_start: u64,
+    old_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -183,7 +186,12 @@ fn scan_dir(
                     edits,
                     input,
                 )?;
-            } else if let Some(edit) = edits.get_mut(&full_path) {
+            } else {
+                let edit = edits.entry(full_path.to_ascii_lowercase()).or_default();
+                if edit.old_start == 0 {
+                    edit.old_start = start;
+                    edit.old_bytes = file_bytes as u64;
+                }
                 if pending_entry.is_none() {
                     edit.entries.push(Vec::new());
                     pending_entry = Some(edit.entries.len() - 1);
@@ -197,8 +205,6 @@ fn scan_dir(
                 if (rec[25] & 128) == 0 {
                     pending_entry = None;
                 }
-            } else if pending_entry.is_some() {
-                return Err("Invalid ISO multi-extent file.".to_string());
             }
         }
         pos += ISO_SECTOR;
@@ -228,10 +234,16 @@ pub fn repack_iso(
 
     let mut edits: BTreeMap<String, Edit> = BTreeMap::new();
     for item in replacements {
-        edits.entry(item.iso_path.clone()).or_default().local = item.local.clone();
+        edits
+            .entry(item.iso_path.to_ascii_lowercase())
+            .or_default()
+            .local = item.local.clone();
     }
     for name in removals {
-        edits.entry(name.clone()).or_default();
+        edits
+            .entry(name.to_ascii_lowercase())
+            .or_default()
+            .is_removed = true;
     }
 
     let mut input = File::open(source).map_err(|e| format!("Cannot open source ISO: {}", e))?;
@@ -327,197 +339,224 @@ pub fn repack_iso(
         }
     }
 
-    if let Some(cb) = progress {
-        cb(75, "Đang sao chép cấu trúc tệp ISO gốc...");
+    let mut movable_boundary = source_end;
+    for (path, edit) in &edits {
+        if !edit.local.as_os_str().is_empty()
+            && (path.contains("squashfs") || path.contains(".sfs"))
+            && edit.old_start > 0
+        {
+            movable_boundary = std::cmp::min(movable_boundary, edit.old_start);
+        }
+    }
+    if movable_boundary == source_end {
+        let max_boot = boot_sectors.iter().max().copied().unwrap_or(0);
+        for edit in edits.values() {
+            if (!edit.local.as_os_str().is_empty() || edit.is_removed) && edit.old_start > max_boot {
+                movable_boundary = std::cmp::min(movable_boundary, edit.old_start);
+            }
+        }
+    }
+    if movable_boundary == source_end {
+        movable_boundary = 14142;
     }
 
-    fs::copy(source, target).map_err(|e| format!("Cannot copy source ISO: {}", e))?;
+    if let Some(cb) = progress {
+        cb(70, "Đang sao chép phần đầu cấu trúc ISO...");
+    }
 
     let mut output = OpenOptions::new()
         .read(true)
         .write(true)
+        .create(true)
+        .truncate(true)
         .open(target)
         .map_err(|e| format!("Cannot open target ISO for writing: {}", e))?;
 
-    let mut end = source_end;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    let prefix_len = movable_boundary * ISO_SECTOR;
+    let mut copied = 0u64;
+    input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    while copied < prefix_len {
+        let count = std::cmp::min(prefix_len - copied, buffer.len() as u64) as usize;
+        input.read_exact(&mut buffer[..count]).map_err(|e| e.to_string())?;
+        output.write_all(&buffer[..count]).map_err(|e| e.to_string())?;
+        copied += count as u64;
+    }
+
     const EXTENT_LIMIT: u64 = 0xfffff800;
     let mut erased: BTreeMap<u64, BTreeSet<usize>> = BTreeMap::new();
 
-    let existing_range = |path: &str,
-                          edit: &Edit,
-                          dirs: &BTreeMap<u64, [u8; ISO_SECTOR as usize]>,
-                          ext_list: &[Extent]|
-     -> (u64, u64) {
-        let mut range = (0u64, 0u64);
-        for entry in &edit.entries {
-            let mut start = 0u64;
-            let mut sectors = 0u64;
-            for record in entry {
-                let rec = &dirs.get(&record.sector).unwrap()[record.offset..];
-                let lba = record.base + read_iso_32(&rec[2..6]) as u64;
-                let bytes = read_iso_32(&rec[10..14]);
-                let blocks = (bytes as u64 + ISO_SECTOR - 1) / ISO_SECTOR;
-                if rec[1] != 0
-                    || rec[26] != 0
-                    || rec[27] != 0
-                    || blocks == 0
-                    || lba >= source_end
-                    || blocks > source_end - lba
-                {
-                    return (0, 0);
+    // Handle any replacements located before movable_boundary
+    for (path, edit) in &edits {
+        if edit.old_start < movable_boundary && !edit.local.as_os_str().is_empty() {
+            let size = fs::metadata(&edit.local)
+                .map_err(|e| format!("Cannot read replacement file {}: {}", edit.local.display(), e))?
+                .len();
+            let sectors = (size + ISO_SECTOR - 1) / ISO_SECTOR;
+            let old_sectors = (edit.old_bytes + ISO_SECTOR - 1) / ISO_SECTOR;
+            if sectors > old_sectors {
+                return Err(format!("Tệp {} vượt quá dung lượng cũ trước movable_boundary", path));
+            }
+            let mut repl_file = File::open(&edit.local)
+                .map_err(|e| format!("Cannot open {}: {}", edit.local.display(), e))?;
+            let mut pos = 0u64;
+            while pos < size {
+                let count = std::cmp::min(size - pos, buffer.len() as u64) as usize;
+                repl_file.read_exact(&mut buffer[..count]).map_err(|e| e.to_string())?;
+                write_at(&mut output, edit.old_start * ISO_SECTOR + pos, &buffer[..count])?;
+                pos += count as u64;
+            }
+            let pad = (sectors * ISO_SECTOR - size) as usize;
+            if pad > 0 {
+                let zeros = vec![0u8; pad];
+                write_at(&mut output, edit.old_start * ISO_SECTOR + size, &zeros)?;
+            }
+            for entry in &edit.entries {
+                for record in entry {
+                    let block = directories.get_mut(&record.sector).unwrap();
+                    let rec = &mut block[record.offset..];
+                    write_iso_both(&mut rec[2..10], (edit.old_start - record.base) as u32);
+                    write_iso_both(&mut rec[10..18], size as u32);
                 }
-                if sectors == 0 {
-                    start = lba;
-                }
-                if lba != start + sectors {
-                    return (0, 0);
-                }
-                sectors += blocks;
-            }
-            if range.1 == 0 {
-                range = (start, sectors);
-            }
-            if range != (start, sectors) {
-                return (0, 0);
-            }
-        }
-        for extent in ext_list {
-            if extent.path != path && extent.start < range.0 + range.1 && extent.end > range.0 {
-                return (0, 0);
-            }
-        }
-        range
-    };
-
-    let mut total_repl_bytes = 0u64;
-    for edit in edits.values() {
-        if !edit.local.as_os_str().is_empty() {
-            if let Ok(meta) = fs::metadata(&edit.local) {
-                total_repl_bytes += meta.len();
             }
         }
     }
-    let mut written_repl = 0u64;
-    let mut last_progress = -1;
 
-    for (path, edit) in &edits {
-        if edit.local.as_os_str().is_empty() {
+    let mut movable_files: Vec<(&String, &Edit)> = edits
+        .iter()
+        .filter(|(_, edit)| edit.old_start >= movable_boundary)
+        .collect();
+    movable_files.sort_by_key(|(_, edit)| edit.old_start);
+
+    let mut total_movable_bytes = 0u64;
+    for (_, edit) in &movable_files {
+        if edit.is_removed {
+            continue;
+        }
+        if !edit.local.as_os_str().is_empty() {
+            if let Ok(meta) = fs::metadata(&edit.local) {
+                total_movable_bytes += meta.len();
+            }
+        } else {
+            total_movable_bytes += edit.old_bytes;
+        }
+    }
+
+    let mut written_movable = 0u64;
+    let mut last_progress = -1;
+    let mut current_lba = movable_boundary;
+
+    for (path, edit) in &movable_files {
+        if edit.is_removed {
             for entry in &edit.entries {
                 for record in entry {
-                    erased
-                        .entry(record.sector)
-                        .or_default()
-                        .insert(record.offset);
+                    erased.entry(record.sector).or_default().insert(record.offset);
                 }
             }
             continue;
         }
 
-        if edit.entries.is_empty() {
-            return Err(format!("Cannot locate ISO file to replace: {}", path));
-        }
-
-        let size = fs::metadata(&edit.local)
-            .map_err(|e| {
-                format!(
-                    "Cannot read replacement file {}: {}",
-                    edit.local.display(),
-                    e
-                )
-            })?
-            .len();
-        let sections = std::cmp::max(1, (size + EXTENT_LIMIT - 1) / EXTENT_LIMIT);
-        let sectors = (size + ISO_SECTOR - 1) / ISO_SECTOR;
-
-        let (old_start, old_sectors) = existing_range(path, edit, &directories, &extents);
-
-        let mut reuse = false;
-        if old_sectors > 0 {
-            if sectors <= old_sectors {
-                reuse = true;
+        let start = current_lba;
+        if !edit.local.as_os_str().is_empty() {
+            let size = fs::metadata(&edit.local)
+                .map_err(|e| format!("Cannot read replacement file {}: {}", edit.local.display(), e))?
+                .len();
+            let sectors = (size + ISO_SECTOR - 1) / ISO_SECTOR;
+            if start + sectors > u32::MAX as u64 {
+                return Err("The output ISO exceeds the ISO9660 volume size limit.".to_string());
             }
-        }
 
-        let start = if reuse { old_start } else { end };
-        if start + sectors > u32::MAX as u64 {
-            return Err("The output ISO exceeds the ISO9660 volume size limit.".to_string());
-        }
-
-        for entry in &edit.entries {
-            if entry.len() < sections as usize {
-                return Err(format!(
-                    "The ISO file has too few extents for its replacement: {}",
-                    path
-                ));
-            }
-            let mut position = 0u64;
-            for (i, record) in entry.iter().enumerate() {
-                if i >= sections as usize {
-                    erased
-                        .entry(record.sector)
-                        .or_default()
-                        .insert(record.offset);
-                    continue;
+            let sections = std::cmp::max(1, (size + EXTENT_LIMIT - 1) / EXTENT_LIMIT);
+            for entry in &edit.entries {
+                if entry.len() < sections as usize {
+                    return Err(format!("The ISO file has too few extents for its replacement: {}", path));
                 }
-                let block = directories.get_mut(&record.sector).unwrap();
-                let rec = &mut block[record.offset..];
-                let length = std::cmp::min(size - position, EXTENT_LIMIT);
-                rec[1] = 0;
-                write_iso_both(
-                    &mut rec[2..10],
-                    (start + position / ISO_SECTOR - record.base) as u32,
-                );
-                write_iso_both(&mut rec[10..18], length as u32);
-                let flag = if i + 1 < sections as usize { 128 } else { 0 };
-                rec[25] = (rec[25] & !128) | flag;
-                position += length;
+                let mut position = 0u64;
+                for (i, record) in entry.iter().enumerate() {
+                    if i >= sections as usize {
+                        erased.entry(record.sector).or_default().insert(record.offset);
+                        continue;
+                    }
+                    let block = directories.get_mut(&record.sector).unwrap();
+                    let rec = &mut block[record.offset..];
+                    let length = std::cmp::min(size - position, EXTENT_LIMIT);
+                    rec[1] = 0;
+                    write_iso_both(&mut rec[2..10], (start + position / ISO_SECTOR - record.base) as u32);
+                    write_iso_both(&mut rec[10..18], length as u32);
+                    let flag = if i + 1 < sections as usize { 128 } else { 0 };
+                    rec[25] = (rec[25] & !128) | flag;
+                    position += length;
+                }
             }
-        }
 
-        let mut replacement = File::open(&edit.local)
-            .map_err(|e| format!("Cannot open replacement {}: {}", edit.local.display(), e))?;
-        let mut buffer = vec![0u8; 1024 * 1024];
-        let mut pos = 0u64;
-        while pos < size {
-            let count = std::cmp::min(size - pos, buffer.len() as u64) as usize;
-            replacement
-                .read_exact(&mut buffer[..count])
-                .map_err(|e| e.to_string())?;
-            write_at(&mut output, start * ISO_SECTOR + pos, &buffer[..count])?;
-            pos += count as u64;
-            written_repl += count as u64;
-            if let Some(cb) = progress {
-                if total_repl_bytes > 0 {
-                    let p = 85 + ((written_repl * 10) / total_repl_bytes) as i32;
-                    if p != last_progress {
-                        cb(p, "Đang ghi ảnh hệ thống mới vào ISO...");
-                        last_progress = p;
+            let mut replacement = File::open(&edit.local)
+                .map_err(|e| format!("Cannot open replacement {}: {}", edit.local.display(), e))?;
+            let mut pos = 0u64;
+            while pos < size {
+                let count = std::cmp::min(size - pos, buffer.len() as u64) as usize;
+                replacement.read_exact(&mut buffer[..count]).map_err(|e| e.to_string())?;
+                write_at(&mut output, start * ISO_SECTOR + pos, &buffer[..count])?;
+                pos += count as u64;
+                written_movable += count as u64;
+                if let Some(cb) = progress {
+                    if total_movable_bytes > 0 {
+                        let p = 75 + ((written_movable * 15) / total_movable_bytes) as i32;
+                        if p != last_progress {
+                            cb(p, "Đang ghi dữ liệu hệ thống mới vào ISO...");
+                            last_progress = p;
+                        }
                     }
                 }
             }
-        }
-
-        let pad = (sectors * ISO_SECTOR - size) as usize;
-        if pad > 0 {
-            let zeros = vec![0u8; pad];
-            write_at(&mut output, start * ISO_SECTOR + size, &zeros)?;
-        }
-
-        if old_sectors > 0 && !reuse {
-            let zeros = vec![0u8; 1024 * 1024];
-            let mut p = 0u64;
-            let limit = old_sectors * ISO_SECTOR;
-            while p < limit {
-                let count = std::cmp::min(limit - p, zeros.len() as u64) as usize;
-                write_at(&mut output, old_start * ISO_SECTOR + p, &zeros[..count])?;
-                p += count as u64;
+            let pad = (sectors * ISO_SECTOR - size) as usize;
+            if pad > 0 {
+                let zeros = vec![0u8; pad];
+                write_at(&mut output, start * ISO_SECTOR + size, &zeros)?;
             }
-        }
+            current_lba += sectors;
+        } else {
+            let size = edit.old_bytes;
+            let sectors = (size + ISO_SECTOR - 1) / ISO_SECTOR;
+            if start + sectors > u32::MAX as u64 {
+                return Err("The output ISO exceeds the ISO9660 volume size limit.".to_string());
+            }
 
-        if !reuse {
-            end += sectors;
+            for entry in &edit.entries {
+                for record in entry {
+                    let block = directories.get_mut(&record.sector).unwrap();
+                    let rec = &mut block[record.offset..];
+                    write_iso_both(&mut rec[2..10], (start - record.base) as u32);
+                    write_iso_both(&mut rec[10..18], size as u32);
+                }
+            }
+
+            let mut pos = 0u64;
+            while pos < size {
+                let count = std::cmp::min(size - pos, buffer.len() as u64) as usize;
+                read_at(&mut input, edit.old_start * ISO_SECTOR + pos, &mut buffer[..count])?;
+                write_at(&mut output, start * ISO_SECTOR + pos, &buffer[..count])?;
+                pos += count as u64;
+                written_movable += count as u64;
+                if let Some(cb) = progress {
+                    if total_movable_bytes > 0 {
+                        let p = 75 + ((written_movable * 15) / total_movable_bytes) as i32;
+                        if p != last_progress {
+                            cb(p, "Đang di chuyển tệp ISO theo thứ tự...");
+                            last_progress = p;
+                        }
+                    }
+                }
+            }
+            let pad = (sectors * ISO_SECTOR - size) as usize;
+            if pad > 0 {
+                let zeros = vec![0u8; pad];
+                write_at(&mut output, start * ISO_SECTOR + size, &zeros)?;
+            }
+            current_lba += sectors;
         }
     }
+
+    let end = current_lba;
 
     // Compact erased records
     for (sector, offsets) in &erased {
@@ -546,68 +585,72 @@ pub fn repack_iso(
         cb(95, "Đang đồng bộ bảng phân vùng và boot record ISO...");
     }
 
-    if end != source_end {
-        let mut mbr = [0u8; 512];
-        let mut gpt = [0u8; 512];
-        read_at(&mut output, 0, &mut mbr)?;
-        read_at(&mut output, 512, &mut gpt)?;
+    let mut mbr = [0u8; 512];
+    let mut gpt = [0u8; 512];
+    read_at(&mut output, 0, &mut mbr)?;
+    read_at(&mut output, 512, &mut gpt)?;
 
-        if &gpt[0..8] == b"EFI PART" {
-            let header_size = read_iso_32(&gpt[12..16]) as usize;
-            let part_lba = read_iso_64(&gpt[72..80]);
-            let part_bytes = read_iso_32(&gpt[80..84]) as u64 * read_iso_32(&gpt[84..88]) as u64;
-            if header_size >= 92
-                && header_size <= gpt.len()
-                && part_bytes > 0
-                && part_bytes <= 1024 * 1024
-            {
-                let mut parts = vec![0u8; part_bytes as usize];
-                read_at(&mut output, part_lba * 512, &mut parts)?;
-                let part_sectors = (part_bytes + 511) / 512;
-                let backup_lba = end * 4 + part_sectors;
-                let disk_end = (backup_lba + 4) / 4 * 4;
-                let backup_header = disk_end - 1;
-                let backup_parts = backup_header - part_sectors;
+    let mut final_len_bytes = end * ISO_SECTOR;
 
-                let update_header = |hdr: &mut [u8], current: u64, alternate: u64, entries: u64| {
-                    write_iso_le(&mut hdr[16..20], 0, 4);
-                    write_iso_le(&mut hdr[24..32], current, 8);
-                    write_iso_le(&mut hdr[32..40], alternate, 8);
-                    write_iso_le(&mut hdr[48..56], backup_parts - 1, 8);
-                    write_iso_le(&mut hdr[72..80], entries, 8);
-                    let mut h = Hasher::new();
-                    h.update(&hdr[..header_size]);
-                    let crc = h.finalize();
-                    write_iso_le(&mut hdr[16..20], crc as u64, 4);
-                };
+    if &gpt[0..8] == b"EFI PART" {
+        let header_size = read_iso_32(&gpt[12..16]) as usize;
+        let part_lba = read_iso_64(&gpt[72..80]);
+        let part_bytes = read_iso_32(&gpt[80..84]) as u64 * read_iso_32(&gpt[84..88]) as u64;
+        if header_size >= 92
+            && header_size <= gpt.len()
+            && part_bytes > 0
+            && part_bytes <= 1024 * 1024
+        {
+            let mut parts = vec![0u8; part_bytes as usize];
+            read_at(&mut output, part_lba * 512, &mut parts)?;
+            let part_sectors = (part_bytes + 511) / 512;
+            let backup_lba = end * 4 + part_sectors;
+            let disk_end = (backup_lba + 4) / 4 * 4;
+            let backup_header = disk_end - 1;
+            let backup_parts = backup_header - part_sectors;
 
-                update_header(&mut gpt, 1, backup_header, part_lba);
-                write_at(&mut output, 512, &gpt)?;
+            let update_header = |hdr: &mut [u8], current: u64, alternate: u64, entries: u64| {
+                write_iso_le(&mut hdr[16..20], 0, 4);
+                write_iso_le(&mut hdr[24..32], current, 8);
+                write_iso_le(&mut hdr[32..40], alternate, 8);
+                write_iso_le(&mut hdr[48..56], backup_parts - 1, 8);
+                write_iso_le(&mut hdr[72..80], entries, 8);
+                let mut h = Hasher::new();
+                h.update(&hdr[..header_size]);
+                let crc = h.finalize();
+                write_iso_le(&mut hdr[16..20], crc as u64, 4);
+            };
 
-                let mut backup_gpt = gpt;
-                update_header(&mut backup_gpt, backup_header, 1, backup_parts);
-                write_at(&mut output, backup_parts * 512, &parts)?;
-                write_at(&mut output, backup_header * 512, &backup_gpt)?;
+            update_header(&mut gpt, 1, backup_header, part_lba);
+            write_at(&mut output, 512, &gpt)?;
 
-                if mbr[510] == 0x55 && mbr[511] == 0xaa {
-                    for offset in (446..510).step_by(16) {
-                        let part = &mut mbr[offset..offset + 16];
-                        if part[4] == 0xee {
-                            let part_start = read_iso_32(&part[8..12]) as u64;
-                            let new_len = std::cmp::min(disk_end - part_start, u32::MAX as u64);
-                            write_iso_le(&mut part[12..16], new_len, 4);
-                        }
+            let mut backup_gpt = gpt;
+            update_header(&mut backup_gpt, backup_header, 1, backup_parts);
+            write_at(&mut output, backup_parts * 512, &parts)?;
+            write_at(&mut output, backup_header * 512, &backup_gpt)?;
+
+            if mbr[510] == 0x55 && mbr[511] == 0xaa {
+                for offset in (446..510).step_by(16) {
+                    let part = &mut mbr[offset..offset + 16];
+                    if part[4] == 0xee {
+                        let part_start = read_iso_32(&part[8..12]) as u64;
+                        let new_len = std::cmp::min(disk_end - part_start, u32::MAX as u64);
+                        write_iso_le(&mut part[12..16], new_len, 4);
                     }
-                    write_at(&mut output, 0, &mbr)?;
                 }
+                write_at(&mut output, 0, &mbr)?;
             }
-        }
-
-        for (&sector, (base, mut block)) in &descriptors {
-            write_iso_both(&mut block[80..88], (end - base) as u32);
-            write_at(&mut output, sector * ISO_SECTOR, &block)?;
+            final_len_bytes = disk_end * 512;
         }
     }
+
+    for (&sector, (base, mut block)) in &descriptors {
+        write_iso_both(&mut block[80..88], (end - base) as u32);
+        write_at(&mut output, sector * ISO_SECTOR, &block)?;
+    }
+
+    output.set_len(final_len_bytes).map_err(|e| e.to_string())?;
+    output.flush().map_err(|e| e.to_string())?;
 
     Ok(())
 }

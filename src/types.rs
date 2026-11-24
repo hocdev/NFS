@@ -36,6 +36,7 @@ pub struct Plan {
     pub default_locale: Option<String>,
     pub language_debs: Vec<PathBuf>,
     pub clean_flatpak: bool,
+    pub remove_updatepool_office: bool,
 }
 
 impl Plan {
@@ -51,6 +52,7 @@ impl Plan {
             default_locale: None,
             language_debs: Vec::new(),
             clean_flatpak: false,
+            remove_updatepool_office: true,
         }
     }
 }

@@ -338,6 +338,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 default_locale: None,
                 language_debs: Vec::new(),
                 clean_flatpak: false,
+                remove_updatepool_office: true,
                 replaced_folders: BTreeMap::new(),
             };
 
@@ -354,6 +355,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         i += 1;
                     }
                     "--clean-flatpak" => plan.clean_flatpak = true,
+                    "--keep-updatepool-office" => plan.remove_updatepool_office = false,
+                    "--release" => {
+                        if i + 1 < args.len() {
+                            plan.image.release = args[i + 1].clone();
+                            i += 1;
+                        }
+                    }
                     "--remove" => {
                         if i + 1 < args.len() {
                             plan.remove.insert(args[i + 1].clone());
@@ -479,6 +487,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     ui.set_can_clean_flatpak(has_flatpak);
                                     ui.set_clean_flatpak(false);
                                     ui.set_flatpak_savings(flatpak_savings_str.into());
+                                    ui.set_remove_updatepool_office(true);
                                     ui.set_package_tab(1);
                                     ui.set_search_text("".into());
                                     ui.set_sort_column(0);
@@ -989,6 +998,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let replace_map = replaced_folders.lock().unwrap().clone();
 
                         let clean_flatpak = ui.get_clean_flatpak();
+                        let remove_updatepool_office = ui.get_remove_updatepool_office();
                         let rel_name = ui.get_iso_release_text().to_string();
 
                         let plan = Plan {
@@ -1014,6 +1024,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .map(PathBuf::from)
                                 .collect(),
                             clean_flatpak,
+                            remove_updatepool_office,
                             replaced_folders: replace_map,
                         };
 

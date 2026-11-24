@@ -514,7 +514,48 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             }
         }
         if plan.image.release != plan.original_release {
-            return Err("Đổi tên bản phát hành tạm tắt để giữ metadata nhận diện gốc.".into());
+            for path in ["etc/os-release", "usr/lib/os-release"] {
+                if paths.contains_key(path) {
+                    let old = indexed_text(&mut squash, &paths, path).unwrap_or_default();
+                    let mut lines = Vec::new();
+                    let mut found_pretty = false;
+                    let mut found_name = false;
+                    for line in old.lines() {
+                        if line.starts_with("PRETTY_NAME=") {
+                            lines.push(format!("PRETTY_NAME=\"{}\"", plan.image.release));
+                            found_pretty = true;
+                        } else if line.starts_with("NAME=") {
+                            lines.push(format!("NAME=\"{}\"", plan.image.release));
+                            found_name = true;
+                        } else {
+                            lines.push(line.to_string());
+                        }
+                    }
+                    if !found_pretty {
+                        lines.push(format!("PRETTY_NAME=\"{}\"", plan.image.release));
+                    }
+                    if !found_name {
+                        lines.push(format!("NAME=\"{}\"", plan.image.release));
+                    }
+                    let new_text = lines.join("\n") + "\n";
+                    added.insert(path.into(), new_text.into_bytes());
+                }
+            }
+            for path in ["etc/issue", "etc/issue.net"] {
+                if paths.contains_key(path) {
+                    let old = indexed_text(&mut squash, &paths, path).unwrap_or_default();
+                    let new_text = if old.contains(&plan.original_release) {
+                        old.replace(&plan.original_release, &plan.image.release)
+                    } else {
+                        format!("{} \\n \\l\n", plan.image.release)
+                    };
+                    added.insert(path.into(), new_text.into_bytes());
+                }
+            }
+            log(&format!(
+                "Đã cập nhật tên bản phát hành mới: {}",
+                plan.image.release
+            ));
         }
         progress(20, "Đang đóng gói SquashFS với thông số gốc...");
         let root_new = stage.join("filesystem.squashfs");
@@ -536,20 +577,68 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             iso_path: plan.image.squash_iso_path.clone(),
             local: root_new.clone(),
         }];
-        if let Some(locale) = &plan.default_locale {
-            for (i, (path, _)) in source_files.iter().enumerate() {
-                if path.ends_with(".cfg") {
-                    if let Some(old) = source_iso.read_text(path) {
-                        let new = language::patch_boot_config(&old, locale);
-                        if old != new {
-                            let local = stage.join(format!("boot-{i}.cfg"));
-                            fs::write(&local, new).map_err(|e| e.to_string())?;
-                            replacements.push(IsoReplacement {
-                                iso_path: path.clone(),
-                                local,
-                            });
-                        }
+        if plan.image.release != plan.original_release {
+            if let Some(old) = source_iso.read_text("/.disk/info") {
+                let new = if old.contains(&plan.original_release) {
+                    old.replace(&plan.original_release, &plan.image.release)
+                } else {
+                    format!("{}\n", plan.image.release)
+                };
+                let local = stage.join("disk-info");
+                fs::write(&local, new).map_err(|e| e.to_string())?;
+                replacements.push(IsoReplacement {
+                    iso_path: "/.disk/info".into(),
+                    local,
+                });
+            }
+        }
+        for (i, (path, _)) in source_files.iter().enumerate() {
+            if path.ends_with(".cfg") {
+                if let Some(old) = source_iso.read_text(path) {
+                    let mut new = old.clone();
+                    if let Some(locale) = &plan.default_locale {
+                        new = language::patch_boot_config(&new, locale);
                     }
+                    if plan.image.release != plan.original_release {
+                        new = new.replace(&plan.original_release, &plan.image.release);
+                    }
+                    if old != new {
+                        let local = stage.join(format!("boot-{i}.cfg"));
+                        fs::write(&local, new).map_err(|e| e.to_string())?;
+                        replacements.push(IsoReplacement {
+                            iso_path: path.clone(),
+                            local,
+                        });
+                    }
+                }
+            }
+        }
+        let mut iso_removals = Vec::new();
+        if plan.remove_updatepool_office {
+            for (path, _) in &source_files {
+                let lower = path.to_ascii_lowercase();
+                if lower.starts_with("/updatepool/") {
+                    if lower.contains("wps") || lower.contains("foxit") {
+                        iso_removals.push(path.clone());
+                    }
+                }
+            }
+            if !iso_removals.is_empty() {
+                log(&format!(
+                    "Đã loại bỏ {} tệp WPS Office và Foxit khỏi updatepool trong ISO.",
+                    iso_removals.len()
+                ));
+            }
+            for (path, _) in &source_files {
+                let lower = path.to_ascii_lowercase();
+                if lower.ends_with("custompackages.conf") {
+                    let local = stage.join("custompackages.conf");
+                    fs::write(&local, "{}\n").map_err(|e| e.to_string())?;
+                    replacements.push(IsoReplacement {
+                        iso_path: path.clone(),
+                        local,
+                    });
+                    break;
                 }
             }
         }
@@ -611,23 +700,40 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
                 checksum::md5_file(&replacement.local)?,
             );
         }
+        let removal_set: BTreeSet<String> =
+            iso_removals.iter().map(|s| s.to_ascii_lowercase()).collect();
         for (i, path) in ["/md5sum.txt", "/MD5SUMS"].iter().enumerate() {
             if let Some(old) = source_iso.read_text(path) {
                 let mut new = String::new();
                 for line in old.lines() {
+                    let mut skip = false;
                     let updated = if line.len() > 34 && line.is_char_boundary(32) {
                         let name = line[32..]
                             .trim_start()
                             .trim_start_matches('*')
                             .trim_start_matches("./");
-                        hashes
-                            .get(&format!("/{}", name.trim_start_matches('/')))
-                            .map(|hash| format!("{hash}{}", &line[32..]))
+                        let full = format!("/{}", name.trim_start_matches('/'));
+                        if removal_set.contains(&full.to_ascii_lowercase()) {
+                            skip = true;
+                            None
+                        } else {
+                            hashes
+                                .get(&full)
+                                .or_else(|| {
+                                    hashes
+                                        .iter()
+                                        .find(|(k, _)| k.eq_ignore_ascii_case(&full))
+                                        .map(|(_, v)| v)
+                                })
+                                .map(|hash| format!("{hash}{}", &line[32..]))
+                        }
                     } else {
                         None
                     };
-                    new.push_str(updated.as_deref().unwrap_or(line));
-                    new.push('\n');
+                    if !skip {
+                        new.push_str(updated.as_deref().unwrap_or(line));
+                        new.push('\n');
+                    }
                 }
                 let local = stage.join(format!("checksum-{i}"));
                 fs::write(&local, new).map_err(|e| e.to_string())?;
@@ -648,11 +754,17 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             &plan.image.path,
             &partial,
             &replacements,
-            &[],
+            &iso_removals,
             Some(&|pct, msg| progress(65 + pct / 5, msg)),
         )?;
         progress(87, "Đang đối chiếu toàn bộ tệp và cấu trúc boot...");
-        verify_iso(&plan.image.path, &partial, &source_files, &replacements)?;
+        verify_iso(
+            &plan.image.path,
+            &partial,
+            &source_files,
+            &replacements,
+            &iso_removals,
+        )?;
         let after = fs::metadata(&plan.image.path).map_err(|e| e.to_string())?;
         if source_meta.len() != after.len() || source_meta.modified().ok() != after.modified().ok()
         {
@@ -781,10 +893,21 @@ fn verify_iso(
     target: &Path,
     files: &[(String, Extent)],
     replacements: &[IsoReplacement],
+    removals: &[String],
 ) -> Result<()> {
     let mut iso = IsoReader::new(target).map_err(|e| e.to_string())?;
     let output_files = iso.files()?;
-    if output_files.len() != files.len() {
+    let removal_set: BTreeSet<String> = removals.iter().map(|s| s.to_ascii_lowercase()).collect();
+    for rem in removals {
+        if iso.find(rem).is_some() {
+            return Err(format!("Tệp cần xoá vẫn còn trong ISO: {rem}"));
+        }
+    }
+    let expected_count = files
+        .iter()
+        .filter(|(p, _)| !removal_set.contains(&p.to_ascii_lowercase()))
+        .count();
+    if output_files.len() != expected_count {
         return Err("Danh sách tệp ISO bị thay đổi ngoài kế hoạch".into());
     }
     let mut original = IsoReader::new(source).map_err(|e| e.to_string())?;
@@ -796,10 +919,13 @@ fn verify_iso(
     let mut a = File::open(source).map_err(|e| e.to_string())?;
     let mut b = File::open(target).map_err(|e| e.to_string())?;
     for (path, old) in files {
+        if removal_set.contains(&path.to_ascii_lowercase()) {
+            continue;
+        }
         let new = iso
             .find(path)
             .ok_or_else(|| format!("Mất tệp ISO: {path}"))?;
-        if let Some(replacement) = replacements.iter().find(|r| r.iso_path == *path) {
+        if let Some(replacement) = replacements.iter().find(|r| r.iso_path.eq_ignore_ascii_case(path)) {
             let mut expected = File::open(&replacement.local).map_err(|e| e.to_string())?;
             if expected.metadata().map_err(|e| e.to_string())?.len() != new.size {
                 return Err(format!("Sai kích thước tệp: {path}"));
@@ -938,5 +1064,78 @@ mod tests {
             fields("Package: demo\nDescription: a\n b")["Description"],
             "ab"
         );
+    }
+
+    #[test]
+    fn test_os_release_rename_logic() {
+        let original_os = "PRETTY_NAME=\"NFSChina Desktop OS V5.0-G240\"\nNAME=\"NFSChina Desktop OS\"\nVERSION_ID=\"5.0-G240\"\nID=debian\n";
+        let new_name = "NFS Custom OS 2026";
+        let mut lines = Vec::new();
+        for line in original_os.lines() {
+            if line.starts_with("PRETTY_NAME=") {
+                lines.push(format!("PRETTY_NAME=\"{new_name}\""));
+            } else if line.starts_with("NAME=") {
+                lines.push(format!("NAME=\"{new_name}\""));
+            } else {
+                lines.push(line.to_string());
+            }
+        }
+        let result = lines.join("\n") + "\n";
+        assert!(result.contains("PRETTY_NAME=\"NFS Custom OS 2026\""));
+        assert!(result.contains("NAME=\"NFS Custom OS 2026\""));
+        assert!(result.contains("VERSION_ID=\"5.0-G240\""));
+        assert!(result.contains("ID=debian"));
+    }
+
+    #[test]
+    fn test_checksum_filtering_removals() {
+        let md5_content = "11111111111111111111111111111111  ./live/filesystem.squashfs\n\
+                           22222222222222222222222222222222  ./updatepool/custompackages/wps_office.deb\n\
+                           33333333333333333333333333333333  ./updatepool/custompackages/foxit.deb\n\
+                           44444444444444444444444444444444  ./live/vmlinuz\n";
+        let removals = vec![
+            "/updatepool/custompackages/wps_office.deb".to_string(),
+            "/updatepool/custompackages/foxit.deb".to_string(),
+        ];
+        let removal_set: BTreeSet<String> = removals.iter().map(|s| s.to_ascii_lowercase()).collect();
+        let mut new_lines = Vec::new();
+        for line in md5_content.lines() {
+            let name = line[32..].trim_start().trim_start_matches('*').trim_start_matches("./");
+            let full = format!("/{}", name.trim_start_matches('/'));
+            if !removal_set.contains(&full.to_ascii_lowercase()) {
+                new_lines.push(line);
+            }
+        }
+        let filtered = new_lines.join("\n") + "\n";
+        assert!(filtered.contains("./live/filesystem.squashfs"));
+        assert!(filtered.contains("./live/vmlinuz"));
+        assert!(!filtered.contains("wps_office.deb"));
+        assert!(!filtered.contains("foxit.deb"));
+    }
+
+    #[test]
+    fn test_updatepool_file_matching() {
+        let paths = vec![
+            "/live/filesystem.squashfs".to_string(),
+            "/updatepool/custompackages/foxitofficesuite_8_0_4_0430.deb".to_string(),
+            "/updatepool/custompackages/foxitofficesuite.png".to_string(),
+            "/updatepool/custompackages/wps_office_2023_12_8_2_1117.deb".to_string(),
+            "/updatepool/custompackages/wps_office2023_kprometheus.png".to_string(),
+            "/updatepool/custompackages/custompackages.conf".to_string(),
+            "/live/vmlinuz".to_string(),
+        ];
+        let mut to_remove = Vec::new();
+        let mut conf_found = false;
+        for path in &paths {
+            let lower = path.to_ascii_lowercase();
+            if lower.starts_with("/updatepool/") && (lower.contains("wps") || lower.contains("foxit")) {
+                to_remove.push(path.clone());
+            }
+            if lower.ends_with("custompackages.conf") {
+                conf_found = true;
+            }
+        }
+        assert_eq!(to_remove.len(), 4);
+        assert!(conf_found);
     }
 }
