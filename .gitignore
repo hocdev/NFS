@@ -2,6 +2,7 @@
 *.cache
 *.tmp
 *.pseudo
+/.isolite*
 /.buildtools
 /target
 
