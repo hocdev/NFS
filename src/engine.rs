@@ -237,7 +237,7 @@ pub fn inspect_iso<F: Fn(&str)>(path: &Path, log: F) -> Result<Image> {
         .unwrap_or_default()
         .into_iter()
         .collect();
-    available.extend(crate::language_payload::bundled_locales(&abi));
+
     for path in paths.keys() {
         if let Some(base) = path
             .strip_prefix("usr/lib/locale/")
@@ -265,6 +265,13 @@ pub fn inspect_iso<F: Fn(&str)>(path: &Path, log: F) -> Result<Image> {
         path: path.into(),
         release,
         distro_name,
+        glibc_abi: abi,
+        architecture: inv
+            .records
+            .get("dpkg")
+            .and_then(|r| r.get("Architecture"))
+            .cloned()
+            .unwrap_or_default(),
         supported_locales,
         packages,
         has_flatpak: flatpak_bytes > 0,
@@ -460,6 +467,11 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             &mut squash,
             &paths,
             &abi,
+            inv.records
+                .get("dpkg")
+                .and_then(|r| r.get("Architecture"))
+                .map(String::as_str)
+                .unwrap_or(""),
             &locales,
             &plan.language_debs,
             &mut added,

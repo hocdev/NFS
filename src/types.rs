@@ -15,6 +15,8 @@ pub struct Image {
     pub path: PathBuf,
     pub release: String,
     pub distro_name: String,
+    pub glibc_abi: String,
+    pub architecture: String,
     pub supported_locales: Vec<String>,
     pub packages: Vec<Package>,
     pub has_flatpak: bool,

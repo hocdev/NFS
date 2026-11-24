@@ -11,6 +11,13 @@ export struct PackageItem {
     replaced_path: string,
 }
 
+export struct LanguageItem {
+    locale: string,
+    label: string,
+    installed: bool,
+    selected: bool,
+}
+
 export struct AddedPackageItem {
     name: string,
     file_name: string,
@@ -124,7 +131,12 @@ export component MainWindow inherits Window {
     in-out property <bool> sort_ascending: true;
     in-out property <int> language_index: 0;
     in-out property <[string]> locale_choices: ["Giữ nguyên"];
-    in-out property <string> extra_locales: "";
+    in-out property <[string]> locale_labels: ["Giữ ngôn ngữ gốc"];
+    in-out property <[LanguageItem]> language_options: [];
+    in-out property <string> language_search: "";
+    in-out property <int> languages_to_add: 0;
+    callback toggle_language(string, bool);
+    callback filter_languages(string);
     in-out property <string> language_deb_paths: "";
     in-out property <int> language_deb_count: 0;
     callback add_language_debs();
@@ -491,6 +503,16 @@ export component MainWindow inherits Window {
                             }
                         }
 
+                        Rectangle {
+                            height: 42px; border-radius: 8px;
+                            background: root.current_view == 3 ? #3b82f6 : (language_nav.has-hover ? #334155 : transparent);
+                            language_nav := TouchArea { clicked => { root.current_view = 3; } }
+                            HorizontalLayout { padding-left: 14px; spacing: 12px;
+                                Text { text: "文"; font-size: 17px; color: #cbd5e1; vertical-alignment: center; }
+                                Text { text: "Ngôn ngữ"; font-size: 13px; color: #f1f5f9; vertical-alignment: center; }
+                            }
+                        }
+
                         // Nav 2: Options & Pack
                         Rectangle {
                             height: 42px;
@@ -584,7 +606,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: root.current_view == 0 ? "Ứng Dụng & Gói Phần Mềm Trong Hệ Thống" :
                                       (root.current_view == 1 ? "Quản Lý Gói Cài Đặt Thêm Vào ISO (.deb)" :
-                                      "Tùy Chọn Hệ Thống & Tiến Trình Đóng Gói ISO");
+                                      (root.current_view == 3 ? "Ngôn ngữ của ISO" : "Tùy Chọn Hệ Thống & Tiến Trình Đóng Gói ISO"));
                                 color: #f8fafc;
                                 font-size: 16px;
                                 font-weight: 700;
@@ -592,7 +614,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: root.current_view == 0 ? "Chọn hoặc bỏ chọn các phần mềm bạn muốn gỡ bỏ để tối ưu dung lượng" :
                                       (root.current_view == 1 ? "Thêm gói mới sẽ được nhúng trực tiếp vào SquashFS và cấu hình tự động" :
-                                      "Ngôn ngữ, dọn dẹp và đóng gói ISO");
+                                      (root.current_view == 3 ? "Tích chọn ngôn ngữ cần thêm và đặt giao diện mặc định của ISO mới" : "Dọn dẹp và đóng gói ISO"));
                                 color: #94a3b8;
                                 font-size: 12px;
                             }
@@ -1252,36 +1274,13 @@ export component MainWindow inherits Window {
                         spacing: 18px;
 
                         Rectangle {
-                            height: 190px;
-                            background: #1e293b;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #334155;
-                            VerticalLayout {
-                                padding: 14px;
-                                spacing: 8px;
-                                HorizontalLayout {
-                                    height: 22px;
-                                    Text { text: "Ngôn ngữ hệ thống"; color: #f1f5f9; font-size: 15px; font-weight: 600; }
-                                    Text { text: "Tích hợp trực tiếp vào ISO"; color: #34d399; font-size: 12px; horizontal-alignment: right; }
+                            height: 70px; background: #1e293b; border-radius: 10px;
+                            HorizontalLayout { padding: 14px; spacing: 16px;
+                                VerticalLayout { spacing: 4px;
+                                    Text { text: "Giao diện mặc định: " + root.locale_labels[root.language_index]; color: #f1f5f9; font-size: 13px; }
+                                    Text { text: "Thêm " + root.languages_to_add + " ngôn ngữ mới; ngôn ngữ đã có được bỏ qua."; color: #94a3b8; font-size: 12px; }
                                 }
-                                HorizontalLayout {
-                                    height: 36px;
-                                    spacing: 10px;
-                                    Text { width: 144px; text: "Ngôn ngữ mặc định"; color: #cbd5e1; vertical-alignment: center; font-size: 13px; }
-                                    ComboBox { width: 225px; height: 36px; model: root.locale_choices; current-index <=> root.language_index; enabled: root.iso_loaded && !root.is_building; }
-                                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                                    Button { text: "Thêm bản dịch .deb..."; height: 36px; enabled: !root.is_building; clicked => { root.add_language_debs(); } }
-                                    Button { text: "Xóa lựa chọn"; height: 36px; enabled: root.language_deb_paths != "" && !root.is_building; clicked => { root.language_deb_paths = ""; root.language_deb_count = 0; } }
-                                }
-                                HorizontalLayout {
-                                    height: 34px;
-                                    spacing: 10px;
-                                    Text { width: 144px; text: "Locale bổ sung"; color: #cbd5e1; vertical-alignment: center; font-size: 13px; }
-                                    LineEdit { text <=> root.extra_locales; placeholder-text: "Ví dụ: vi_VN.UTF-8, en_US.UTF-8"; enabled: !root.is_building; }
-                                }
-                                Text { text: root.language_deb_count == 0 ? "Dùng dữ liệu có sẵn trong ISO và bộ locale Việt / Anh đi kèm phù hợp." : "Đã chọn " + root.language_deb_count + " gói bản dịch để trích xuất trực tiếp."; color: #94a3b8; font-size: 12px; overflow: elide; }
-                                Text { text: "Không cài gói ngôn ngữ hoặc tạo locale khi khởi động. Phần mềm cần có bản dịch tương ứng."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
+                                Button { text: "Chọn ngôn ngữ..."; clicked => { root.current_view = 3; } }
                             }
                         }
 
@@ -1459,6 +1458,43 @@ export component MainWindow inherits Window {
                         }
                     }
 
+
+                    if root.current_view == 3: VerticalLayout {
+                        padding: 24px; spacing: 14px;
+                        Rectangle {
+                            height: 118px; background: #1e293b; border-radius: 10px; border-width: 1px; border-color: #334155;
+                            VerticalLayout { padding: 16px; spacing: 10px;
+                                HorizontalLayout { height: 36px; spacing: 14px;
+                                    Text { width: 215px; text: "Giao diện mặc định của ISO"; color: #f1f5f9; font-size: 13px; vertical-alignment: center; }
+                                    ComboBox { width: 310px; height: 36px; model: root.locale_labels; current-index <=> root.language_index; enabled: root.iso_loaded && !root.is_building; }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                }
+                                Text { text: "Chọn Tiếng Anh để ISO mới khởi động bằng tiếng Anh thay cho tiếng Trung."; color: #94a3b8; font-size: 12px; wrap: word-wrap; }
+                                Text { text: "Thiết lập này được ghi sẵn vào ISO; không có màn hình chọn ngôn ngữ khi boot."; color: #34d399; font-size: 11px; }
+                            }
+                        }
+                        HorizontalLayout { height: 36px; spacing: 12px;
+                            LineEdit { placeholder-text: "Tìm ngôn ngữ: Việt, English, French, Japanese..."; text <=> root.language_search; enabled: root.iso_loaded; edited => { root.filter_languages(self.text); } }
+                            Text { text: "Sẽ thêm: " + root.languages_to_add; color: #cbd5e1; vertical-alignment: center; font-size: 12px; }
+                        }
+                        Text { text: root.iso_loaded ? "Tích các ngôn ngữ muốn thêm. Mục Có sẵn được giữ nguyên, không thêm trùng." : "Mở ISO để nhận diện các ngôn ngữ đang có và bộ dữ liệu tương thích."; color: #94a3b8; font-size: 12px; wrap: word-wrap; }
+                        ListView {
+                            for lang[index] in root.language_options: Rectangle {
+                                height: 54px; background: mod(index,2) == 0 ? #1e293b : #182335;
+                                HorizontalLayout { padding-left: 14px; padding-right: 14px; spacing: 14px;
+                                    VerticalLayout { width: 20px; alignment: center;
+                                        AppCheckBox { checked: lang.selected; enabled: !lang.installed && !root.is_building; toggled(value) => { root.toggle_language(lang.locale,value); } }
+                                    }
+                                    VerticalLayout { alignment: center; spacing: 3px;
+                                        Text { text: lang.label; color: #f1f5f9; font-size: 13px; }
+                                        Text { text: lang.locale; color: #94a3b8; font-size: 11px; }
+                                    }
+                                    Text { width: 86px; text: lang.installed ? "Có sẵn" : (lang.selected ? "Sẽ thêm" : "Chưa có"); color: lang.installed ? #34d399 : (lang.selected ? #60a5fa : #94a3b8); vertical-alignment: center; horizontal-alignment: right; font-size: 12px; }
+                                }
+                            }
+                        }
+                        Text { text: "Dữ liệu được tích hợp trực tiếp vào hệ thống. Bản dịch của ứng dụng phụ thuộc các tệp dịch có sẵn trong ISO."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
+                    }
 
                 }
 // BOTTOM STATUS BAR

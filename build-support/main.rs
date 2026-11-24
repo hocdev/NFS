@@ -1,5 +1,11 @@
+mod datasets;
 mod icon;
+#[allow(dead_code)]
+#[path = "../src/xz.rs"]
+mod xz;
 fn main() {
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    datasets::generate(&out);
     slint_build::compile("ui/app.slint").expect("Slint compilation failed");
     println!("cargo:rerun-if-changed=ui/icons/app.ico");
     if std::env::var("TARGET")

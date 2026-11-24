@@ -1,4 +1,4 @@
-# ISOLite 0.3 — Rust + Slint 1.18
+# ISOLite 0.4 — Rust + Slint 1.18
 
 Giao diện giữ Slint **1.18.1**. Ngoài Slint và các phụ thuộc bắt buộc của Slint, backend chỉ dùng thư viện chuẩn Rust: đọc/ghi ISO9660, CRC32/CRC64, MD5, XZ/LZMA2 và SquashFS. Không gọi 7-Zip, xorriso, mksquashfs, WSL hoặc DLL nén ở máy Windows. Các công cụ độc lập chỉ được dùng trong quá trình phát triển để đối chiếu kết quả.
 
@@ -9,7 +9,7 @@ Trình chỉnh sửa CachyOS Hello, callback, trình tải nguồn và backend p
 - Tìm root SquashFS từ cấu trúc ISO và magic, không dựa vào tên tệp ISO. Nếu có nhiều root filesystem, dừng thay vì tự chọn sai.
 - Đọc `etc/os-release`, tự giải symlink đến `usr/lib/os-release`; dùng `PRETTY_NAME`, `NAME`, `ID`. Khi thiếu metadata, dùng `.disk/info` hoặc tên ISO, không gán tên Ubuntu/Debian/NFS giả định.
 - Đọc dpkg status, file ownership và desktop entries để tìm ứng dụng. Bảo vệ gói Essential/Protected, priority required/important, chủ sở hữu dịch vụ, phiên desktop, boot, bộ cài và phụ thuộc của chúng. Kiểm tra ngược Depends/Pre-Depends, alternatives và Provides trước khi gỡ.
-- Danh sách locale lấy từ `usr/share/i18n/locales` trong ảnh đang mở; không gán danh sách gói hay ngôn ngữ riêng cho NFS.
+- Tách rõ ngôn ngữ đã có (đọc locale-archive và dữ liệu LC_*) với 302 locale UTF-8 có thể thêm từ bộ dữ liệu glibc 2.31. Danh mục sinh từ dữ liệu thực tế, có tên dễ đọc và ô tích chọn; ngôn ngữ đã có được bỏ qua.
 - Backend hiện hỗ trợ root SquashFS **4.0 little endian, XZ/LZMA2, dpkg**. ISO dùng bộ nén khác hoặc database khác sẽ báo chưa hỗ trợ.
 
 ## ISO đã kiểm tra
@@ -31,14 +31,28 @@ Trong VMware chọn **Linux → Debian 11.x 64-bit** theo nền Debian 11 đư�
 
 ## Thêm ngôn ngữ
 
-Trong Tùy chọn, chọn locale mặc định từ danh sách tự phát hiện, hoặc nhập locale bổ sung, phân cách bằng dấu phẩy. Ví dụ `vi_VN.UTF-8,en_US.UTF-8`.
+Mở ISO, vào mục **Ngôn ngữ** ở thanh bên:
 
-- Giữ các locale cũ, bổ sung vào `locale.gen`.
-- Cập nhật LANG/LANGUAGE và gỡ LC_* mâu thuẫn trong cấu hình môi trường, giữ các khóa khác.
-- Cập nhật tham số locale trên các dòng boot Live/OnlyInstall thực tế trong GRUB/ISOLINUX.
-- Dịch vụ được kích hoạt bằng drop-in của multi-user.target, không sửa unit của hãng. Dịch vụ first boot chạy `localedef` có sẵn **trong Linux guest**, trước display manager. Không chạy mã Linux trên Windows.
-- Có thể thêm gói dịch `.deb` đúng bản phân phối, kiến trúc và đủ phụ thuộc. Gói được giữ nguyên và cài bằng `dpkg` trong guest để bảo toàn maintainer scripts, symlink, quyền và database. Không tự lấy gói Ubuntu hoặc thay APT sources. Nếu cài/generate thất bại, dịch vụ không ghi marker thành công; xem `journalctl -u isolite-locales`.
-- ISO này đã có định nghĩa locale và nhiều bản dịch tiếng Việt. Chọn locale không tự tạo bản dịch còn thiếu trong phần mềm riêng của hãng; có thể cần gói dịch bổ sung. Trình cài tùy biến/OOBE của hãng cũng cần kiểm thử thực tế.
+1. Các mục **Có sẵn** đã có dữ liệu locale trong ISO, không thêm trùng.
+2. Tích Tiếng Việt, French, Japanese hoặc các ngôn ngữ khác muốn thêm. Bộ glibc 2.31 đi kèm có **302 locale UTF-8**. Có tìm kiếm theo tên hoặc mã; không cần nhập mã locale hoặc chọn `.deb`.
+3. **Giao diện mặc định của ISO** đặt ngôn ngữ trước khi đóng gói. Bạn chọn **Tiếng Anh (Hoa Kỳ)** trong danh sách để đổi từ tiếng Trung; chương trình không ép ngôn ngữ mặc định bằng mã. ISO mới khởi động thẳng bằng ngôn ngữ đã chọn thay cho tiếng Trung; không thêm màn hình lựa chọn lúc boot.
+
+Dữ liệu LC_* đã biên dịch, bản dịch có sẵn và LANG/LANGUAGE được tích hợp **trực tiếp vào SquashFS**. Không có `setup-locales.sh`, service cài ngôn ngữ, `localedef`, `locale-gen` hoặc `dpkg` do ISOLite thêm để chạy khi boot. Thành phần locales nguyên bản của Debian Live dùng `--keep-existing` sẽ bỏ qua locale đã sẵn sàng.
+
+- Tiếng Anh có trong chính locale-archive của NFS; được giữ nguyên.
+- Đã tải `pkg/languages/locales-all_2.31-13+deb11u11_amd64.deb` từ kho Debian 11 chính thức. Kho NFS trong ISO không phản hồi khi kiểm tra. Không gọi đây là gói chính thức do NFS phát hành.
+- Dữ liệu được nhúng trong EXE, chọn theo ABI glibc đọc từ dpkg. Không cài hoặc thay libc. Có kiểm tra category magic/định dạng trước khi áp dụng; không áp dữ liệu 2.31 sang glibc khác.
+- `pkg/languages/` là thư mục dữ liệu ngôn ngữ duy nhất, chứa gói tải sẵn, catalog tự động, nguồn và bản quyền; không có bundle hay nhánh xử lý riêng cho Việt/Anh. Các gói trong `pkg/languages/` được dò tự động; ABI và kiến trúc lấy từ control metadata. Catalog được đọc từ payload LC_CTYPE; sidecar `.catalog.tsv` chỉ dùng nếu CRC gói khớp. Thêm/thay gói dữ liệu không cần sửa tên file hoặc nhánh ngôn ngữ trong Rust. Registry nhúng được sinh trong OUT_DIR, không có nhánh đặc biệt Việt/Anh.
+- Locale không tự tạo bản dịch giao diện còn thiếu trong phần mềm riêng của hãng. Nhiều bản dịch GNU/GNOME/Qt đã có trong ISO; phần mềm chỉ có tiếng Trung vẫn cần bản dịch tương ứng. CLI `--language-deb` chỉ trích xuất dữ liệu dịch hợp lệ, không chạy maintainer script.
+- Gói ứng dụng ở mục **Gói cài thêm** là chức năng riêng, không được dùng để triển khai ngôn ngữ.
+
+## Tốc độ và giao diện
+
+Đọc file ownership/desktop qua chỉ mục SquashFS thay vì duyệt lại thư mục cho từng gói; tránh sao chép block metadata khi cache đã có. Cache nhị phân danh sách dùng chữ ký đường dẫn, kích thước, mtime và CRC mẫu ISO; có CRC payload và giới hạn kích thước. Cache chỉ phục vụ giao diện: khi build vẫn đọc lại nguồn và kiểm tra phụ thuộc.
+
+Đo cùng ISO: trước 6,20 s; sau tối ưu lần đầu 2,08 s; cache khoảng 0,01 s. Thời gian phụ thuộc ổ đĩa và máy. Widget dùng bảng màu tối, mục ngôn ngữ có lựa chọn rõ ràng thay cho ô nhập locale.
+
+`build.rs` ở gốc đã xóa. Cargo tự chạy `build-support/main.rs`; icon ICO được chuyển thành tài nguyên COFF bằng Rust chuẩn, nhúng vào PE trong quá trình link, không cần winres/windres.
 
 ## SquashFS và an toàn
 

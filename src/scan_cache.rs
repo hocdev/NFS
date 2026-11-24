@@ -25,7 +25,7 @@ fn location(path: &Path) -> Option<PathBuf> {
         f.read_exact(&mut sample[n..]).ok()?;
     }
     let key = format!(
-        "5|{}|{}|{}|{}",
+        "7|{}|{}|{}|{}",
         canonical.display(),
         meta.len(),
         time,
@@ -38,7 +38,7 @@ fn location(path: &Path) -> Option<PathBuf> {
     let root = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("ISOLite/scan-v5");
+        .join("ISOLite/scan-v7");
     Some(root.join(format!("{hash:016x}.bin")))
 }
 fn string(out: &mut Vec<u8>, s: &str) {
@@ -49,6 +49,8 @@ fn encode(image: &Image) -> Vec<u8> {
     let mut out = Vec::new();
     string(&mut out, &image.release);
     string(&mut out, &image.distro_name);
+    string(&mut out, &image.glibc_abi);
+    string(&mut out, &image.architecture);
     string(&mut out, &image.squash_iso_path);
     out.extend_from_slice(&image.squash_offset.to_le_bytes());
     out.extend_from_slice(&image.flatpak_bytes.to_le_bytes());
@@ -64,7 +66,7 @@ fn encode(image: &Image) -> Vec<u8> {
         out.push(u8::from(p.protected_package));
         out.extend_from_slice(&p.installed_kib.unwrap_or(u64::MAX).to_le_bytes());
     }
-    let mut all = b"ISC5".to_vec();
+    let mut all = b"ISC7".to_vec();
     all.extend_from_slice(&crate::xz::crc32(&out).to_le_bytes());
     all.extend(out);
     all
@@ -95,7 +97,7 @@ impl<'a> Decoder<'a> {
 }
 fn decode(path: &Path, bytes: &[u8]) -> Option<Image> {
     if bytes.len() < 8
-        || &bytes[..4] != b"ISC5"
+        || &bytes[..4] != b"ISC7"
         || crate::xz::crc32(&bytes[8..]) != u32::from_le_bytes(bytes[4..8].try_into().ok()?)
     {
         return None;
@@ -106,6 +108,8 @@ fn decode(path: &Path, bytes: &[u8]) -> Option<Image> {
     };
     let release = d.string()?;
     let distro_name = d.string()?;
+    let glibc_abi = d.string()?;
+    let architecture = d.string()?;
     let squash_iso_path = d.string()?;
     let squash_offset = d.u64()?;
     let flatpak_bytes = d.u64()?;
@@ -147,6 +151,8 @@ fn decode(path: &Path, bytes: &[u8]) -> Option<Image> {
         path: path.into(),
         release,
         distro_name,
+        glibc_abi,
+        architecture,
         supported_locales,
         packages,
         has_flatpak: flatpak_bytes > 0,
@@ -183,6 +189,8 @@ mod tests {
             path: "sample.iso".into(),
             release: "Sample".into(),
             distro_name: "test".into(),
+            glibc_abi: "2.31".into(),
+            architecture: "amd64".into(),
             supported_locales: vec!["vi_VN.UTF-8".into()],
             packages: Vec::new(),
             has_flatpak: false,

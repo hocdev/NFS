@@ -73,12 +73,21 @@ pub fn glibc_abi(version: &str) -> Option<String> {
         None
     }
 }
-pub fn bundled_locales(abi: &str) -> Vec<String> {
-    if abi == "2.31" {
-        vec!["en_US.UTF-8".into(), "vi_VN.UTF-8".into()]
-    } else {
-        Vec::new()
-    }
+pub fn catalog(abi: &str, architecture: &str) -> BTreeMap<String, (String, String)> {
+    crate::locale_registry::PACKS
+        .iter()
+        .filter(|pack| {
+            pack.abi == abi && (pack.architecture == architecture || pack.architecture == "all")
+        })
+        .flat_map(|pack| pack.catalog.lines())
+        .filter_map(|line| {
+            let mut p = line.split('\t');
+            Some((
+                p.next()?.to_owned(),
+                (p.next()?.to_owned(), p.next()?.to_owned()),
+            ))
+        })
+        .collect()
 }
 fn safe_path(path: &str) -> Result<String> {
     let mut parts = Vec::new();
@@ -116,6 +125,12 @@ fn cstring(field: &[u8]) -> Result<String> {
 }
 /// Decode only data, never execute maintainer scripts or install a package.
 pub fn tar_payload(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
+    tar_filtered(bytes, None)
+}
+fn tar_filtered(
+    bytes: &[u8],
+    folders: Option<&BTreeSet<String>>,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut entries: BTreeMap<String, (u8, &[u8], String)> = BTreeMap::new();
     let mut pos = 0;
     let mut long_name = None;
@@ -192,7 +207,12 @@ pub fn tar_payload(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
     }
     let mut result = BTreeMap::new();
     for name in entries.keys() {
-        if allowed(name) {
+        if allowed(name)
+            && folders.is_none_or(|f| {
+                f.iter()
+                    .any(|folder| name.starts_with(&format!("usr/lib/locale/{folder}/")))
+            })
+        {
             result.insert(name.clone(), resolve(name, &entries, 0)?.to_vec());
         }
     }
@@ -208,6 +228,12 @@ fn allowed(path: &str) -> bool {
 }
 pub fn deb_payload(path: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    deb_bytes(&bytes, None)
+}
+fn deb_bytes(
+    bytes: &[u8],
+    folders: Option<&BTreeSet<String>>,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     if !bytes.starts_with(b"!<arch>\n") {
         return Err("Invalid language .deb".into());
     }
@@ -230,10 +256,10 @@ pub fn deb_payload(path: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
             .get(pos + 60..pos + 60 + size)
             .ok_or("Truncated Debian member")?;
         if name == "data.tar.xz" {
-            return tar_payload(&crate::xz::decode(data, 512 * 1024 * 1024)?);
+            return tar_filtered(&crate::xz::decode(data, 512 * 1024 * 1024)?, folders);
         }
         if name == "data.tar" {
-            return tar_payload(data);
+            return tar_filtered(data, folders);
         }
         if name.starts_with("data.tar.") {
             return Err("Gói dịch cần data.tar.xz hoặc data.tar; không cài gói lúc boot.".into());
@@ -246,6 +272,7 @@ pub fn integrate(
     fs: &mut Squash,
     paths: &BTreeMap<String, Node>,
     abi: &str,
+    architecture: &str,
     locales: &BTreeSet<String>,
     packages: &[PathBuf],
     added: &mut BTreeMap<String, Vec<u8>>,
@@ -260,25 +287,60 @@ pub fn integrate(
         .ok()
         .map(|b| archived_locales(&b))
         .unwrap_or_default();
-    for locale in locales {
-        let bundle = if abi == "2.31" {
-            match locale.as_str() {
-                "vi_VN.UTF-8" => {
-                    Some(include_bytes!("../pkg/locale-data/glibc-2.31-vi.tar.xz").as_slice())
-                }
-                "en_US.UTF-8" => {
-                    Some(include_bytes!("../pkg/locale-data/glibc-2.31-en.tar.xz").as_slice())
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        if let Some(bundle) = bundle {
-            for (path, data) in tar_payload(&crate::xz::decode(bundle, 8 * 1024 * 1024)?)? {
-                added.entry(path).or_insert(data);
+    let missing: BTreeSet<String> = locales
+        .iter()
+        .filter(|locale| {
+            !archived.contains(locale)
+                && !CATEGORIES.iter().all(|cat| {
+                    paths.contains_key(&format!(
+                        "usr/lib/locale/{}/{}",
+                        locale.replace(".UTF-8", ".utf8"),
+                        cat
+                    ))
+                })
+        })
+        .cloned()
+        .collect();
+    let index = catalog(abi, architecture);
+    let mut unresolved = missing.clone();
+    for pack in crate::locale_registry::PACKS
+        .iter()
+        .filter(|p| p.abi == abi && (p.architecture == architecture || p.architecture == "all"))
+    {
+        let entries: BTreeMap<_, _> = pack
+            .catalog
+            .lines()
+            .filter_map(|line| {
+                let mut p = line.split('\t');
+                Some((p.next()?.to_owned(), p.next()?.to_owned()))
+            })
+            .collect();
+        let folders: BTreeSet<_> = unresolved
+            .iter()
+            .filter_map(|code| entries.get(code).cloned())
+            .collect();
+        if folders.is_empty() {
+            continue;
+        }
+        for (path, data) in deb_bytes(pack.data, Some(&folders))? {
+            let Some(rest) = path.strip_prefix("usr/lib/locale/") else {
+                continue;
+            };
+            let Some((folder, category)) = rest.split_once('/') else {
+                continue;
+            };
+            if let Some((locale, _)) = index.iter().find(|(_, p)| p.0 == folder) {
+                added
+                    .entry(format!(
+                        "usr/lib/locale/{}/{category}",
+                        locale.replace(".UTF-8", ".utf8")
+                    ))
+                    .or_insert(data);
             }
         }
+        unresolved.retain(|code| !entries.contains_key(code));
+    }
+    for locale in &missing {
         let normalized = locale.replace(".UTF-8", ".utf8");
         let base = format!("usr/lib/locale/{normalized}/");
         if !archived.contains(locale) {
@@ -301,11 +363,11 @@ pub fn integrate(
     if !locales.is_empty() {
         added.insert(
             "usr/share/doc/isolite-language-data/COPYRIGHT".into(),
-            include_bytes!("../pkg/locale-data/COPYRIGHT.txt").to_vec(),
+            include_bytes!("../pkg/languages/COPYRIGHT.txt").to_vec(),
         );
         added.insert(
             "usr/share/doc/isolite-language-data/SOURCE".into(),
-            include_bytes!("../pkg/locale-data/SOURCE.txt").to_vec(),
+            include_bytes!("../pkg/languages/SOURCE.txt").to_vec(),
         );
     }
     Ok(())
@@ -314,22 +376,31 @@ pub fn integrate(
 mod tests {
     use super::*;
     #[test]
-    fn bundled_data_has_every_category() {
-        for bytes in [
-            include_bytes!("../pkg/locale-data/glibc-2.31-vi.tar.xz").as_slice(),
-            include_bytes!("../pkg/locale-data/glibc-2.31-en.tar.xz").as_slice(),
-        ] {
-            let p = tar_payload(&crate::xz::decode(bytes, 8 * 1024 * 1024).unwrap()).unwrap();
-            assert_eq!(p.len(), 12);
+    fn registry_uses_package_metadata() {
+        assert!(!crate::locale_registry::PACKS.is_empty());
+        for pack in crate::locale_registry::PACKS {
+            assert!(!catalog(pack.abi, pack.architecture).is_empty());
+            assert!(catalog("unsupported", pack.architecture).is_empty());
+        }
+    }
+    #[test]
+    fn full_catalog_extracts_only_requested_languages() {
+        let pack = &crate::locale_registry::PACKS[0];
+        let index = catalog(pack.abi, pack.architecture);
+        let folders: BTreeSet<_> = index.values().take(2).map(|p| p.0.clone()).collect();
+        let files = deb_bytes(pack.data, Some(&folders)).unwrap();
+        assert_eq!(files.len(), folders.len() * CATEGORIES.len());
+        for folder in folders {
             for category in CATEGORIES {
-                assert!(p.keys().any(|p| p.ends_with(category)));
+                assert!(files
+                    .get(&format!("usr/lib/locale/{folder}/{category}"))
+                    .is_some_and(|v| v.len() > 8));
             }
         }
     }
     #[test]
-    fn rejects_escape_and_wrong_version() {
+    fn rejects_escape_and_parses_version() {
         assert!(safe_path("../../etc/passwd").is_err());
         assert_eq!(glibc_abi("2.31-13+deb11u3+m11+1nfs5"), Some("2.31".into()));
-        assert!(bundled_locales("2.36").is_empty());
     }
 }

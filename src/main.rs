@@ -15,6 +15,7 @@ mod engine;
 mod iso;
 mod language;
 mod language_payload;
+mod locale_registry;
 mod scan_cache;
 mod squash;
 mod types;
@@ -212,6 +213,64 @@ fn apply_package_filter(
     ui.set_selected_count(selected_removals.len() as i32);
 }
 
+fn update_language_choices(ui: &MainWindow, img: &Image, selected: &BTreeSet<String>, query: &str) {
+    let mut catalog = language_payload::catalog(&img.glibc_abi, &img.architecture);
+    for locale in &img.supported_locales {
+        catalog
+            .entry(locale.clone())
+            .or_insert((String::new(), locale.clone()));
+    }
+    let mut entries: Vec<_> = catalog.into_iter().collect();
+    entries.sort_by_key(|(code, (_, label))| {
+        (!img.supported_locales.contains(code), label.to_lowercase())
+    });
+    let old = ui
+        .get_locale_choices()
+        .row_data(ui.get_language_index().max(0) as usize)
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let q = query.to_lowercase();
+    let mut rows = Vec::new();
+    let mut codes = vec![String::new()];
+    let mut labels = vec!["Giữ ngôn ngữ gốc".to_string()];
+    for (locale, (_, label)) in entries {
+        let installed = img.supported_locales.contains(&locale);
+        let chosen = selected.contains(&locale);
+        if installed || chosen {
+            codes.push(locale.clone());
+            labels.push(label.clone());
+        }
+        if q.is_empty() || locale.to_lowercase().contains(&q) || label.to_lowercase().contains(&q) {
+            rows.push(LanguageItem {
+                locale: locale.into(),
+                label: label.into(),
+                installed,
+                selected: installed || chosen,
+            });
+        }
+    }
+    let default = codes
+        .iter()
+        .position(|s| *s == old)
+        .filter(|i| *i > 0)
+        .unwrap_or(0);
+    ui.set_language_options(ModelRc::from(Rc::new(VecModel::from(rows))));
+    ui.set_locale_choices(ModelRc::from(Rc::new(VecModel::from(
+        codes
+            .into_iter()
+            .map(slint::SharedString::from)
+            .collect::<Vec<_>>(),
+    ))));
+    ui.set_locale_labels(ModelRc::from(Rc::new(VecModel::from(
+        labels
+            .into_iter()
+            .map(slint::SharedString::from)
+            .collect::<Vec<_>>(),
+    ))));
+    ui.set_language_index(default as i32);
+    ui.set_languages_to_add(selected.len() as i32);
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -330,6 +389,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let staged_debs = Arc::new(Mutex::new(Vec::<PathBuf>::new()));
     let all_packages = Arc::new(Mutex::new(Vec::<Package>::new()));
     let selected_removals = Arc::new(Mutex::new(BTreeSet::<String>::new()));
+    let selected_languages = Arc::new(Mutex::new(BTreeSet::<String>::new()));
     let replaced_folders = Arc::new(Mutex::new(BTreeMap::<String, PathBuf>::new()));
     let sort_column = Arc::new(Mutex::new(0i32));
     let sort_ascending = Arc::new(Mutex::new(true));
@@ -339,6 +399,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let current_image = current_image.clone();
         let all_packages = all_packages.clone();
         let selected_removals = selected_removals.clone();
+        let selected_languages = selected_languages.clone();
         let replaced_folders = replaced_folders.clone();
         let sort_column = sort_column.clone();
         let sort_ascending = sort_ascending.clone();
@@ -352,6 +413,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let current_image = current_image.clone();
                 let all_packages = all_packages.clone();
                 let selected_removals = selected_removals.clone();
+                let selected_languages = selected_languages.clone();
                 let replaced_folders = replaced_folders.clone();
                 let sort_column = sort_column.clone();
                 let sort_ascending = sort_ascending.clone();
@@ -393,13 +455,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let replaced_folders_ui = replaced_folders.clone();
 
                             let distro_name = img.distro_name.clone();
-                            let mut choices = vec!["Giữ nguyên".to_string()];
-                            choices.extend(img.supported_locales.clone());
-
                             let has_flatpak = img.has_flatpak;
                             let flatpak_savings_str = format_bytes(img.flatpak_bytes);
                             let release_str = img.release.clone();
                             let path_str = img.path.display().to_string();
+                            let language_image = img.clone();
+                            selected_languages.lock().unwrap().clear();
                             *current_image.lock().unwrap() = Some(img);
 
                             let _ = slint::invoke_from_event_loop(move || {
@@ -408,13 +469,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     ui.set_iso_path_text(path_str.into());
                                     ui.set_iso_release_text(release_str.clone().into());
                                     ui.set_iso_distro_badge(distro_name.into());
-                                    ui.set_locale_choices(ModelRc::from(Rc::new(VecModel::from(
-                                        choices
-                                            .into_iter()
-                                            .map(slint::SharedString::from)
-                                            .collect::<Vec<_>>(),
-                                    ))));
-                                    ui.set_language_index(0);
+                                    ui.set_language_search("".into());
+                                    update_language_choices(
+                                        &ui,
+                                        &language_image,
+                                        &BTreeSet::new(),
+                                        "",
+                                    );
                                     ui.set_can_clean_flatpak(has_flatpak);
                                     ui.set_clean_flatpak(false);
                                     ui.set_flatpak_savings(flatpak_savings_str.into());
@@ -860,12 +921,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    {
+        let weak = ui_handle.clone();
+        let image = current_image.clone();
+        let selected = selected_languages.clone();
+        main_window.on_toggle_language(move |locale, checked| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let current = image.lock().unwrap();
+            let Some(img) = current.as_ref() else {
+                return;
+            };
+            let code = locale.to_string();
+            if img.supported_locales.contains(&code) {
+                return;
+            }
+            let mut choice = selected.lock().unwrap();
+            if checked {
+                choice.insert(code);
+            } else {
+                choice.remove(&code);
+            }
+            update_language_choices(&ui, img, &choice, &ui.get_language_search());
+        });
+    }
+    {
+        let weak = ui_handle.clone();
+        let image = current_image.clone();
+        let selected = selected_languages.clone();
+        main_window.on_filter_languages(move |query| {
+            if let (Some(ui), Some(img)) = (weak.upgrade(), image.lock().unwrap().as_ref()) {
+                update_language_choices(&ui, img, &selected.lock().unwrap(), &query);
+            }
+        });
+    }
+
     // 12. Build ISO Action
     {
         let ui_weak = ui_handle.clone();
         let current_image = current_image.clone();
         let staged_debs = staged_debs.clone();
         let selected_removals = selected_removals.clone();
+        let selected_languages = selected_languages.clone();
         let replaced_folders = replaced_folders.clone();
 
         main_window.on_build_iso_clicked(move || {
@@ -901,13 +999,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             },
                             remove: remove_set,
                             debs: staged_debs.lock().unwrap().clone(),
-                            locales: ui
-                                .get_extra_locales()
-                                .split(',')
-                                .map(str::trim)
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_owned)
-                                .collect(),
+                            locales: selected_languages.lock().unwrap().iter().cloned().collect(),
                             default_locale: if ui.get_language_index() > 0 {
                                 ui.get_locale_choices()
                                     .row_data(ui.get_language_index() as usize)
