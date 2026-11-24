@@ -1,0 +1,1542 @@
+import { Button, ComboBox, CheckBox, LineEdit, ScrollView, ListView, HorizontalBox, VerticalBox } from "std-widgets.slint";
+
+export struct PackageItem {
+    name: string,
+    version: string,
+    group: string,
+    is_protected: bool,
+    size_str: string,
+    selected: bool,
+    is_replaced: bool,
+    replaced_path: string,
+}
+
+export struct AddedPackageItem {
+    name: string,
+    file_name: string,
+    size_str: string,
+    path: string,
+    status: string,
+}
+
+component IconImage inherits VerticalLayout {
+    in property <image> source;
+    in property <length> icon-width: 16px;
+    in property <length> icon-height: 16px;
+    in property <color> colorize: #ffffff;
+    in property <length> y-offset: 0px;
+
+    alignment: center;
+    padding: 0px;
+    spacing: 0px;
+
+    Rectangle {
+        width: root.icon-width;
+        height: root.icon-height;
+
+        Image {
+            source: root.source;
+            width: root.icon-width;
+            height: root.icon-height;
+            colorize: root.colorize;
+            x: 0px;
+            y: root.y-offset;
+        }
+    }
+}
+
+component AppCheckBox inherits Rectangle {
+    in-out property <bool> checked: false;
+    in-out property <bool> enabled: true;
+    in-out property <color> checked_color: #2563eb;
+    in-out property <color> unchecked_border: #94a3b8;
+    callback toggled(bool);
+
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    background: root.checked ? (root.enabled ? root.checked_color : #64748b) : (root.enabled ? (chk_touch.has-hover ? #334155 : #1e293b) : #0f172a);
+    border-width: root.checked ? 0px : 1.8px;
+    border-color: root.enabled ? (chk_touch.has-hover ? #cbd5e1 : root.unchecked_border) : #334155;
+
+    chk_touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+
+    if root.checked: Text {
+        text: "✓";
+        color: #ffffff;
+        font-size: 13px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "ISOLite - Trình Tùy Biến & Đóng Gói ISO Linux";
+    icon: @image-url("icons/app.png");
+    preferred-width: 1260px;
+    preferred-height: 760px;
+    min-width: 1040px;
+    min-height: 640px;
+    background: #0f172a;
+    no-frame: true;
+    resize-border-width: 5px;
+    default-font-family: "Segoe UI, Inter, sans-serif";
+
+    // Callbacks for custom titlebar window controls
+    callback minimize_window();
+    callback maximize_window();
+    callback close_window();
+
+    // State properties
+    in-out property <int> current_view: 0; // 0: Packages, 1: Added Debs, 2: Options
+    in-out property <int> package_tab: 1;  // 1: 3rd-party, 2: System
+
+    in-out property <bool> iso_loaded: false;
+    in-out property <string> iso_path_text: "Chưa chọn tệp ISO nào";
+    in-out property <string> iso_release_text: "Chưa nạp hệ thống";
+    in-out property <string> iso_distro_badge: "Linux";
+
+    in-out property <string> search_text: "";
+    in-out property <[PackageItem]> packages: [];
+    in-out property <[AddedPackageItem]> added_packages: [];
+
+    in-out property <bool> clean_flatpak: false;
+    in-out property <bool> can_clean_flatpak: false;
+    in-out property <string> flatpak_savings: "0 MB";
+    in-out property <string> new_release_name: "";
+    in-out property <bool> desktop_refresh: false;
+    in-out property <bool> fast_compression: false;
+
+    in-out property <int> build_progress: 0;
+    in-out property <string> build_status: "Sẵn sàng";
+    in-out property <bool> is_building: false;
+    in-out property <string> log_text: "Hệ thống sẵn sàng.\nVui lòng bấm 'Mở ISO...' để bắt đầu.\n";
+
+    in-out property <string> status_bar_text: "Sẵn sàng";
+    in-out property <int> selected_count: 0;
+    in-out property <int> sort_column: 0; // 0: Name, 1: Size
+    in-out property <bool> sort_ascending: true;
+    in-out property <int> language_index: 0;
+    in-out property <string> extra_locales: "";
+    in-out property <string> language_deb_paths: "";
+    callback add_language_debs();
+
+    // Callbacks to Rust backend
+    callback open_iso_clicked();
+    callback extract_iso_clicked();
+    callback build_iso_clicked();
+    callback add_deb_clicked();
+    callback remove_deb_clicked(int);
+    callback clear_debs_clicked();
+    callback package_toggled(int, bool);
+    callback select_all_packages(bool);
+    callback filter_packages(int, string);
+    callback sort_packages(int);
+    callback export_package_clicked(string);
+    callback replace_package_clicked(string);
+    callback reset_package_clicked(string);
+    callback apply_release_clicked();
+
+    VerticalLayout {
+        padding: 0px;
+        spacing: 0px;
+
+        // ==================== CUSTOM SLINT TITLEBAR ====================
+        Rectangle {
+            height: 38px;
+            background: #0f172a;
+
+            WindowMoveArea {
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 0px;
+                    alignment: space-between;
+
+                    // App Brand & Window Title
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+
+                        IconImage {
+                            source: @image-url("icons/disc.svg");
+                            icon-width: 16px;
+                            icon-height: 16px;
+                            colorize: #38bdf8;
+                        }
+
+                        Text {
+                            text: "ISOLite - Trình Tùy Biến & Đóng Gói ISO Linux";
+                            color: #cbd5e1;
+                            font-size: 12px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Window Control Buttons (Minimize, Maximize, Close)
+                    HorizontalLayout {
+                        spacing: 0px;
+                        alignment: end;
+
+                        // Minimize
+                        Rectangle {
+                            width: 46px;
+                            height: 38px;
+                            background: min_btn.has-hover ? #334155 : transparent;
+                            min_btn := TouchArea {
+                                clicked => { root.minimize_window(); }
+                            }
+                            Image {
+                                source: @image-url("icons/win-min.svg");
+                                width: 14px;
+                                height: 14px;
+                                colorize: #94a3b8;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // Maximize
+                        Rectangle {
+                            width: 46px;
+                            height: 38px;
+                            background: max_btn.has-hover ? #334155 : transparent;
+                            max_btn := TouchArea {
+                                clicked => { root.maximize_window(); }
+                            }
+                            Image {
+                                source: @image-url("icons/win-max.svg");
+                                width: 13px;
+                                height: 13px;
+                                colorize: #94a3b8;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // Close
+                        Rectangle {
+                            width: 46px;
+                            height: 38px;
+                            background: close_btn.has-hover ? #dc2626 : transparent;
+                            close_btn := TouchArea {
+                                clicked => { root.close_window(); }
+                            }
+                            Image {
+                                source: @image-url("icons/win-close.svg");
+                                width: 13px;
+                                height: 13px;
+                                colorize: close_btn.has-hover ? #ffffff : #94a3b8;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: #334155;
+            }
+        }
+
+        // ==================== MAIN WORKSPACE ====================
+        HorizontalLayout {
+            padding: 0px;
+            spacing: 0px;
+
+            // ==================== LEFT SIDEBAR ====================
+            Rectangle {
+                width: 290px;
+                background: #1e293b;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 16px;
+
+                    // Brand Header
+                    HorizontalLayout {
+                        height: 40px;
+                        spacing: 10px;
+                        alignment: start;
+
+                        Rectangle {
+                            width: 40px;
+                            height: 40px;
+                            border-radius: 8px;
+                            background: #3b82f6;
+
+                            Image {
+                                source: @image-url("icons/disc.svg");
+                                width: 22px;
+                                height: 22px;
+                                colorize: #ffffff;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: "ISOLite Studio";
+                                color: #f8fafc;
+                                font-size: 16px;
+                                font-weight: 700;
+                            }
+                            Text {
+                                text: "Bản Rust Siêu Tốc & Độc Lập";
+                                color: #94a3b8;
+                                font-size: 11px;
+                            }
+                        }
+                    }
+
+                    // ISO Status Card
+                    Rectangle {
+                        border-radius: 10px;
+                        background: #0f172a;
+                        border-width: 1px;
+                        border-color: root.iso_loaded ? #22c55e : #334155;
+
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 8px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 8px;
+                                        height: 8px;
+                                        border-radius: 4px;
+                                        background: root.iso_loaded ? #22c55e : #64748b;
+                                    }
+                                }
+
+                                Text {
+                                    text: root.iso_loaded ? "Đã nạp ISO thành công" : "Chưa có ảnh ISO";
+                                    color: root.iso_loaded ? #4ade80 : #94a3b8;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: root.iso_release_text;
+                                color: #f1f5f9;
+                                font-size: 14px;
+                                font-weight: 700;
+                                overflow: elide;
+                            }
+
+                            Text {
+                                text: root.iso_path_text;
+                                color: #64748b;
+                                font-size: 11px;
+                                overflow: elide;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                // Custom styled "Mở ISO..." button
+                                Rectangle {
+                                    height: 32px;
+                                    border-radius: 6px;
+                                    background: btn_open_touch.has-hover ? #3b82f6 : #2563eb;
+                                    btn_open_touch := TouchArea {
+                                        clicked => { root.open_iso_clicked(); }
+                                    }
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        spacing: 6px;
+                                        IconImage {
+                                            source: @image-url("icons/folder.svg");
+                                            icon-width: 14px;
+                                            icon-height: 14px;
+                                            colorize: #ffffff;
+                                        }
+                                        Text {
+                                            text: "Mở ISO...";
+                                            color: #ffffff;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                // Custom styled "Giải nén..." button
+                                Rectangle {
+                                    height: 32px;
+                                    border-radius: 6px;
+                                    background: root.iso_loaded ? (btn_ext_touch.has-hover ? #475569 : #334155) : #1e293b;
+                                    btn_ext_touch := TouchArea {
+                                        enabled: root.iso_loaded;
+                                        clicked => { root.extract_iso_clicked(); }
+                                    }
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        spacing: 6px;
+                                        IconImage {
+                                            source: @image-url("icons/extract.svg");
+                                            icon-width: 14px;
+                                            icon-height: 14px;
+                                            colorize: root.iso_loaded ? #e2e8f0 : #64748b;
+                                        }
+                                        Text {
+                                            text: "Giải nén...";
+                                            color: root.iso_loaded ? #e2e8f0 : #64748b;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Navigation Items
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        // Nav 0: Packages
+                        Rectangle {
+                            height: 42px;
+                            border-radius: 8px;
+                            background: root.current_view == 0 ? #3b82f6 : (nav0_touch.has-hover ? #334155 : transparent);
+                            nav0_touch := TouchArea {
+                                clicked => { root.current_view = 0; }
+                            }
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 12px;
+                                alignment: start;
+                                IconImage {
+                                    source: @image-url("icons/package.svg");
+                                    icon-width: 16px;
+                                    icon-height: 16px;
+                                    colorize: root.current_view == 0 ? #ffffff : #94a3b8;
+                                }
+                                Text {
+                                    text: "Ứng dụng & Gói hệ thống";
+                                    color: root.current_view == 0 ? #ffffff : #cbd5e1;
+                                    font-size: 13px;
+                                    font-weight: root.current_view == 0 ? 600 : 500;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // Nav 1: Debs / Pkg
+                        Rectangle {
+                            height: 42px;
+                            border-radius: 8px;
+                            background: root.current_view == 1 ? #3b82f6 : (nav1_touch.has-hover ? #334155 : transparent);
+                            nav1_touch := TouchArea {
+                                clicked => { root.current_view = 1; }
+                            }
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 12px;
+                                alignment: start;
+                                IconImage {
+                                    source: @image-url("icons/plus.svg");
+                                    icon-width: 16px;
+                                    icon-height: 16px;
+                                    colorize: root.current_view == 1 ? #ffffff : #94a3b8;
+                                }
+                                Text {
+                                    text: "Gói cài thêm (.deb/.pkg)";
+                                    color: root.current_view == 1 ? #ffffff : #cbd5e1;
+                                    font-size: 13px;
+                                    font-weight: root.current_view == 1 ? 600 : 500;
+                                    vertical-alignment: center;
+                                }
+                                if root.added_packages.length > 0: VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 22px;
+                                        height: 22px;
+                                        border-radius: 11px;
+                                        background: #ef4444;
+                                        Text {
+                                            text: "\{root.added_packages.length}";
+                                            color: white;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Nav 2: Options & Pack
+                        Rectangle {
+                            height: 42px;
+                            border-radius: 8px;
+                            background: root.current_view == 2 ? #3b82f6 : (nav2_touch.has-hover ? #334155 : transparent);
+                            nav2_touch := TouchArea {
+                                clicked => { root.current_view = 2; }
+                            }
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 12px;
+                                alignment: start;
+                                IconImage {
+                                    source: @image-url("icons/settings.svg");
+                                    icon-width: 16px;
+                                    icon-height: 16px;
+                                    colorize: root.current_view == 2 ? #ffffff : #94a3b8;
+                                }
+                                Text {
+                                    text: "Tùy chọn & Đóng gói";
+                                    color: root.current_view == 2 ? #ffffff : #cbd5e1;
+                                    font-size: 13px;
+                                    font-weight: root.current_view == 2 ? 600 : 500;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Spacer
+                    Rectangle {}
+
+                    // Primary Bottom Build Action Button
+                    Rectangle {
+                        height: 48px;
+                        border-radius: 10px;
+                        background: root.iso_loaded ? (b_touch.has-hover ? #1d4ed8 : #2563eb) : #475569;
+                        b_touch := TouchArea {
+                            enabled: root.iso_loaded && !root.is_building;
+                            clicked => {
+                                root.current_view = 2;
+                                root.build_iso_clicked();
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 8px;
+                            IconImage {
+                                source: @image-url("icons/rocket.svg");
+                                icon-width: 18px;
+                                icon-height: 18px;
+                                colorize: #ffffff;
+                            }
+                            Text {
+                                text: "TẠO ISO TÙY CHỈNH";
+                                color: white;
+                                font-size: 13px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ==================== MAIN CONTENT AREA ====================
+            VerticalLayout {
+                padding: 0px;
+                spacing: 0px;
+
+                // TOP HEADER BAR
+                Rectangle {
+                    height: 72px;
+                    background: #1e293b;
+
+                    Rectangle {
+                        y: parent.height - 1px;
+                        height: 1px;
+                        background: #334155;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 24px;
+                        padding-right: 24px;
+                        alignment: space-between;
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 4px;
+                            Text {
+                                text: root.current_view == 0 ? "Ứng Dụng & Gói Phần Mềm Trong Hệ Thống" :
+                                      (root.current_view == 1 ? "Quản Lý Gói Cài Đặt Thêm Vào ISO (.deb / .pkg.tar.zst)" :
+                                      "Tùy Chọn Hệ Thống & Tiến Trình Đóng Gói ISO");
+                                color: #f8fafc;
+                                font-size: 16px;
+                                font-weight: 700;
+                            }
+                            Text {
+                                text: root.current_view == 0 ? "Chọn hoặc bỏ chọn các phần mềm bạn muốn gỡ bỏ để tối ưu dung lượng" :
+                                      (root.current_view == 1 ? "Thêm gói mới sẽ được nhúng trực tiếp vào SquashFS và cấu hình tự động" :
+                                      "Ngôn ngữ, dọn dẹp và đóng gói ISO NFS Desktop");
+                                color: #94a3b8;
+                                font-size: 12px;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                height: 28px;
+                                border-radius: 14px;
+                                background: #334155;
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    IconImage {
+                                        source: @image-url("icons/check.svg");
+                                        icon-width: 12px;
+                                        icon-height: 12px;
+                                        colorize: root.iso_loaded ? #4ade80 : #94a3b8;
+                                    }
+                                    Text {
+                                        text: root.iso_loaded ? "Sẵn sàng đóng gói" : "Chờ nạp ISO";
+                                        color: root.iso_loaded ? #4ade80 : #94a3b8;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // VIEW CONTENT
+                Rectangle {
+                    background: #0f172a;
+
+                    // ---------- VIEW 0: PACKAGES ----------
+                    if root.current_view == 0: VerticalLayout {
+                        padding-left: 20px;
+                        padding-top: 16px;
+                        padding-bottom: 16px;
+                        padding-right: 4px;
+                        spacing: 14px;
+
+                        // Search & Filter Toolbar
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 34px;
+
+                            // Subtabs (Ứng dụng bên thứ 3 & Gói hệ thống)
+                            HorizontalLayout {
+                                spacing: 6px;
+
+                                Rectangle {
+                                    height: 34px;
+                                    border-radius: 6px;
+                                    background: root.package_tab == 1 ? #2563eb : (tab1_touch.has-hover ? #334155 : #1e293b);
+                                    border-width: 1px;
+                                    border-color: root.package_tab == 1 ? #3b82f6 : #475569;
+                                    tab1_touch := TouchArea {
+                                        clicked => {
+                                            root.package_tab = 1;
+                                            root.filter_packages(1, root.search_text);
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        padding-left: 14px;
+                                        padding-right: 14px;
+                                        alignment: center;
+                                        Text {
+                                            text: "Ứng dụng bên thứ 3";
+                                            color: root.package_tab == 1 ? #ffffff : #cbd5e1;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    height: 34px;
+                                    border-radius: 6px;
+                                    background: root.package_tab == 2 ? #2563eb : (tab2_touch.has-hover ? #334155 : #1e293b);
+                                    border-width: 1px;
+                                    border-color: root.package_tab == 2 ? #3b82f6 : #475569;
+                                    tab2_touch := TouchArea {
+                                        clicked => {
+                                            root.package_tab = 2;
+                                            root.filter_packages(2, root.search_text);
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        padding-left: 14px;
+                                        padding-right: 14px;
+                                        alignment: center;
+                                        Text {
+                                            text: "Gói hệ thống";
+                                            color: root.package_tab == 2 ? #ffffff : #cbd5e1;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Search Box
+                            LineEdit {
+                                height: 34px;
+                                placeholder-text: "Tìm kiếm gói phần mềm...";
+                                text <=> root.search_text;
+                                edited(query) => {
+                                    root.filter_packages(root.package_tab, query);
+                                }
+                            }
+
+                            // Custom "Chọn tất cả" button with SVG icon
+                            Rectangle {
+                                width: 120px;
+                                height: 34px;
+                                border-radius: 6px;
+                                background: sel_all_btn.has-hover ? #334155 : #1e293b;
+                                border-width: 1px;
+                                border-color: #475569;
+                                sel_all_btn := TouchArea {
+                                    clicked => { root.select_all_packages(true); }
+                                }
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 6px;
+                                    IconImage {
+                                        source: @image-url("icons/check.svg");
+                                        icon-width: 14px;
+                                        icon-height: 14px;
+                                        colorize: #4ade80;
+                                    }
+                                    Text {
+                                        text: "Chọn tất cả";
+                                        color: #e2e8f0;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // Custom "Bỏ chọn tất cả" button with SVG icon (Fixes tofu box icon error)
+                            Rectangle {
+                                width: 135px;
+                                height: 34px;
+                                border-radius: 6px;
+                                background: desel_btn.has-hover ? #334155 : #1e293b;
+                                border-width: 1px;
+                                border-color: #475569;
+                                desel_btn := TouchArea {
+                                    clicked => { root.select_all_packages(false); }
+                                }
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 6px;
+                                    IconImage {
+                                        source: @image-url("icons/xmark.svg");
+                                        icon-width: 14px;
+                                        icon-height: 14px;
+                                        colorize: #f87171;
+                                    }
+                                    Text {
+                                        text: "Bỏ chọn tất cả";
+                                        color: #e2e8f0;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Table Header
+                        Rectangle {
+                            height: 36px;
+                            border-radius: 6px;
+                            background: #1e293b;
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 36px;
+                                spacing: 8px;
+
+                                Text {
+                                    width: 32px;
+                                    text: "Bỏ";
+                                    color: #94a3b8;
+                                    font-weight: 600;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+
+                                // Tên gói (Sortable - Flexible width)
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    min-width: 60px;
+                                    name_hdr := TouchArea {
+                                        clicked => { root.sort_packages(0); }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: start;
+                                        Text {
+                                            text: "Tên gói";
+                                            color: name_hdr.has-hover ? #ffffff : (root.sort_column == 0 ? #38bdf8 : #94a3b8);
+                                            font-weight: 600;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+                                        if root.sort_column == 0: Text {
+                                            text: root.sort_ascending ? "▲" : "▼";
+                                            color: #38bdf8;
+                                            font-size: 10px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    width: 90px;
+                                    text: "Phiên bản";
+                                    color: #94a3b8;
+                                    font-weight: 600;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    width: 70px;
+                                    text: "Nhóm";
+                                    color: #94a3b8;
+                                    font-weight: 600;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+
+                                // Dung lượng (Sortable)
+                                Rectangle {
+                                    width: 65px;
+                                    size_hdr := TouchArea {
+                                        clicked => { root.sort_packages(1); }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: start;
+                                        Text {
+                                            text: "Dung lượng";
+                                            color: size_hdr.has-hover ? #ffffff : (root.sort_column == 1 ? #38bdf8 : #94a3b8);
+                                            font-weight: 600;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+                                        if root.sort_column == 1: Text {
+                                            text: root.sort_ascending ? "▲" : "▼";
+                                            color: #38bdf8;
+                                            font-size: 10px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    width: 190px;
+                                    text: "Thao tác";
+                                    color: #94a3b8;
+                                    font-weight: 600;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // Package List Virtualized ListView
+                        ListView {
+                            for item[index] in root.packages: Rectangle {
+                                height: 44px;
+                                background: transparent;
+
+                                Rectangle {
+                                    x: 0px;
+                                    y: 2px;
+                                    width: parent.width - 20px;
+                                    height: 40px;
+                                    border-radius: 6px;
+                                    background: item.selected ? #3f1519 : (item.is_replaced ? #0c3525 : #131c2e);
+                                    border-width: (item.selected || item.is_replaced) ? 1px : 0px;
+                                    border-color: item.selected ? #ef4444 : (item.is_replaced ? #10b981 : transparent);
+
+                                    HorizontalLayout {
+                                        padding-left: 14px;
+                                        padding-right: 12px;
+                                        spacing: 8px;
+
+                                        VerticalLayout {
+                                            width: 32px;
+                                            alignment: center;
+                                            AppCheckBox {
+                                                checked: item.selected;
+                                                enabled: !item.is_protected && !item.is_replaced;
+                                                checked_color: #ef4444;
+                                                unchecked_border: #94a3b8;
+                                                toggled(val) => { root.package_toggled(index, val); }
+                                            }
+                                        }
+
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            min-width: 80px;
+                                            text: item.name;
+                                            color: item.selected ? #fca5a5 : (item.is_replaced ? #86efac : #f1f5f9);
+                                            font-size: 13px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            width: 90px;
+                                            text: item.version;
+                                            color: #94a3b8;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            width: 70px;
+                                            text: item.group;
+                                            color: #38bdf8;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            width: 65px;
+                                            text: item.size_str;
+                                            color: #e2e8f0;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        HorizontalLayout {
+                                            width: 190px;
+                                            spacing: 6px;
+                                            alignment: start;
+
+                                            // Replace button (when not replaced)
+                                            if !item.is_replaced: VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    height: 22px;
+                                                    border-radius: 11px;
+                                                    background: replace_touch.has-hover ? #059669 : #1e293b;
+                                                    border-width: 1px;
+                                                    border-color: replace_touch.has-hover ? #34d399 : #475569;
+
+                                                    replace_touch := TouchArea {
+                                                        clicked => { root.replace_package_clicked(item.name); }
+                                                    }
+
+                                                    HorizontalLayout {
+                                                        padding-left: 8px;
+                                                        padding-right: 8px;
+                                                        spacing: 4px;
+                                                        alignment: center;
+
+                                                        IconImage {
+                                                            source: @image-url("icons/refresh.svg");
+                                                            icon-width: 11px;
+                                                            icon-height: 11px;
+                                                            colorize: replace_touch.has-hover ? #ffffff : #94a3b8;
+                                                        }
+
+                                                        Text {
+                                                            text: "Thay thế";
+                                                            color: replace_touch.has-hover ? #ffffff : #cbd5e1;
+                                                            font-size: 11px;
+                                                            font-weight: 600;
+                                                            vertical-alignment: center;
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // Reset button (when already replaced)
+                                            if item.is_replaced: VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    height: 22px;
+                                                    border-radius: 11px;
+                                                    background: reset_touch.has-hover ? #dc2626 : #1e293b;
+                                                    border-width: 1px;
+                                                    border-color: reset_touch.has-hover ? #f87171 : #475569;
+
+                                                    reset_touch := TouchArea {
+                                                        clicked => { root.reset_package_clicked(item.name); }
+                                                    }
+
+                                                    HorizontalLayout {
+                                                        padding-left: 8px;
+                                                        padding-right: 8px;
+                                                        spacing: 4px;
+                                                        alignment: center;
+
+                                                        IconImage {
+                                                            source: @image-url("icons/xmark.svg");
+                                                            icon-width: 10px;
+                                                            icon-height: 10px;
+                                                            colorize: reset_touch.has-hover ? #ffffff : #fca5a5;
+                                                        }
+
+                                                        Text {
+                                                            text: "Hủy thay";
+                                                            color: reset_touch.has-hover ? #ffffff : #fca5a5;
+                                                            font-size: 11px;
+                                                            font-weight: 600;
+                                                            vertical-alignment: center;
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // Extract button
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    height: 22px;
+                                                    border-radius: 11px;
+                                                    background: export_touch.has-hover ? #2563eb : #1e293b;
+                                                    border-width: 1px;
+                                                    border-color: export_touch.has-hover ? #60a5fa : #475569;
+
+                                                    export_touch := TouchArea {
+                                                        clicked => { root.export_package_clicked(item.name); }
+                                                    }
+
+                                                    HorizontalLayout {
+                                                        padding-left: 8px;
+                                                        padding-right: 8px;
+                                                        spacing: 4px;
+                                                        alignment: center;
+
+                                                        IconImage {
+                                                            source: @image-url("icons/download.svg");
+                                                            icon-width: 11px;
+                                                            icon-height: 11px;
+                                                            colorize: export_touch.has-hover ? #ffffff : #94a3b8;
+                                                        }
+
+                                                        Text {
+                                                            text: "Trích xuất";
+                                                            color: export_touch.has-hover ? #ffffff : #cbd5e1;
+                                                            font-size: 11px;
+                                                            font-weight: 600;
+                                                            vertical-alignment: center;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ---------- VIEW 1: ADDED PACKAGES ----------
+                    if root.current_view == 1: VerticalLayout {
+                        padding: 24px;
+                        spacing: 16px;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            // Add deb button with SVG icon
+                            Rectangle {
+                                width: 230px;
+                                height: 36px;
+                                border-radius: 6px;
+                                background: add_pkg_touch.has-hover ? #3b82f6 : #2563eb;
+                                add_pkg_touch := TouchArea {
+                                    clicked => { root.add_deb_clicked(); }
+                                }
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 8px;
+                                    IconImage {
+                                        source: @image-url("icons/plus.svg");
+                                        icon-width: 15px;
+                                        icon-height: 15px;
+                                        colorize: #ffffff;
+                                    }
+                                    Text {
+                                        text: "Thêm gói (.deb / .pkg.tar.zst)...";
+                                        color: #ffffff;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // Clear all button with SVG icon
+                            Rectangle {
+                                width: 160px;
+                                height: 36px;
+                                border-radius: 6px;
+                                background: root.added_packages.length > 0 ? (clear_touch.has-hover ? #b91c1c : #dc2626) : #334155;
+                                clear_touch := TouchArea {
+                                    enabled: root.added_packages.length > 0;
+                                    clicked => { root.clear_debs_clicked(); }
+                                }
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 8px;
+                                    IconImage {
+                                        source: @image-url("icons/trash.svg");
+                                        icon-width: 14px;
+                                        icon-height: 14px;
+                                        colorize: root.added_packages.length > 0 ? #ffffff : #64748b;
+                                    }
+                                    Text {
+                                        text: "Xóa tất cả gói đã thêm";
+                                        color: root.added_packages.length > 0 ? #ffffff : #64748b;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Table Header
+                        Rectangle {
+                            height: 36px;
+                            border-radius: 6px;
+                            background: #1e293b;
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                spacing: 12px;
+                                Text { width: 260px; text: "Tên gói / Tệp"; color: #94a3b8; font-weight: 600; font-size: 12px; vertical-alignment: center; }
+                                Text { width: 120px; text: "Kích thước"; color: #94a3b8; font-weight: 600; font-size: 12px; vertical-alignment: center; }
+                                Text { width: 140px; text: "Trạng thái"; color: #94a3b8; font-weight: 600; font-size: 12px; vertical-alignment: center; }
+                                Text { text: "Đường dẫn nguồn"; color: #94a3b8; font-weight: 600; font-size: 12px; vertical-alignment: center; }
+                            }
+                        }
+
+                        if root.added_packages.length == 0: Rectangle {
+                            height: 200px;
+                            border-radius: 8px;
+                            border-width: 2px;
+                            border-color: #334155;
+                            background: #131c2e;
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 10px;
+                                Image {
+                                    source: @image-url("icons/package.svg");
+                                    width: 32px;
+                                    height: 32px;
+                                    colorize: #475569;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: "Chưa có gói phần mềm nào được thêm";
+                                    color: #64748b;
+                                    font-size: 15px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: "Bấm 'Thêm gói' để nạp tệp .deb (Ubuntu/Debian) hoặc .pkg.tar.zst (Arch/CachyOS)";
+                                    color: #475569;
+                                    font-size: 13px;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+
+                        ListView {
+                            for deb[idx] in root.added_packages: Rectangle {
+                                height: 50px;
+                                background: transparent;
+
+                                Rectangle {
+                                    x: 0px;
+                                    y: 3px;
+                                    width: parent.width - 20px;
+                                    height: 44px;
+                                    border-radius: 6px;
+                                    background: #1e293b;
+
+                                    HorizontalLayout {
+                                        padding-left: 16px;
+                                        padding-right: 16px;
+                                        spacing: 12px;
+
+                                        Text {
+                                            width: 260px;
+                                            text: deb.file_name;
+                                            color: #f1f5f9;
+                                            font-size: 13px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            width: 120px;
+                                            text: deb.size_str;
+                                            color: #cbd5e1;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            width: 140px;
+                                            text: deb.status;
+                                            color: #4ade80;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            text: deb.path;
+                                            color: #64748b;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Button {
+                                            text: "Xóa";
+                                            clicked => { root.remove_deb_clicked(idx); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ---------- VIEW 2: OPTIONS & BUILD ----------
+                    if root.current_view == 2: VerticalLayout {
+                        padding: 24px;
+                        spacing: 18px;
+
+                        Rectangle {
+                            height: 168px;
+                            background: #1e293b;
+                            border-radius: 10px;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 6px;
+                                HorizontalLayout {
+                                    Text { text: "Ngôn ngữ mặc định"; color: #f1f5f9; vertical-alignment: center; }
+                                    ComboBox {
+                                        model: ["Giữ nguyên", "Tiếng Việt", "English", "中文"];
+                                        current-index <=> root.language_index;
+                                    }
+                                    Button { text: "Thêm gói dịch .deb..."; clicked => { root.add_language_debs(); } }
+                                    Button { text: "Xóa gói dịch"; clicked => { root.language_deb_paths = ""; } }
+                                }
+                                LineEdit { text <=> root.extra_locales; placeholder-text: "Locale bổ sung, cách nhau bằng dấu phẩy: vi_VN.UTF-8,en_US.UTF-8"; }
+                                Text {
+                                    text: "Gói dịch: " + (root.language_deb_paths == "" ? "Dùng bản dịch có sẵn trong ISO" : root.language_deb_paths);
+                                    color: #94a3b8; overflow: elide; font-size: 11px;
+                                }
+                                Text { text: "Locale được tạo khi boot lần đầu. Gói .deb cần đúng NFS G240 và đủ phụ thuộc; ứng dụng thiếu bản dịch sẽ dùng ngôn ngữ dự phòng."; color: #fbbf24; wrap: word-wrap; font-size: 11px; }
+                            }
+                        }
+
+                        // Options Grid
+                        HorizontalLayout {
+                            spacing: 16px;
+
+                            // Options Card
+                            Rectangle {
+                                border-radius: 10px;
+                                background: #1e293b;
+                                border-width: 1px;
+                                border-color: #334155;
+
+                                VerticalLayout {
+                                    padding: 18px;
+                                    spacing: 14px;
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+                                        IconImage {
+                                            source: @image-url("icons/settings.svg");
+                                            icon-width: 18px;
+                                            icon-height: 18px;
+                                            colorize: #38bdf8;
+                                        }
+                                        Text {
+                                            text: "Tùy Chọn Tinh Chỉnh Hệ Thống";
+                                            color: #f8fafc;
+                                            font-size: 15px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            AppCheckBox {
+                                                checked <=> root.clean_flatpak;
+                                                enabled: root.can_clean_flatpak;
+                                                checked_color: #2563eb;
+                                                unchecked_border: #94a3b8;
+                                            }
+                                        }
+                                        Text {
+                                            text: root.can_clean_flatpak
+                                                ? ("Dọn dẹp kho Flatpak, Runtime & Dữ liệu thừa (Tiết kiệm ~" + root.flatpak_savings + ")")
+                                                : "Bản ISO này không có ứng dụng Flatpak cài sẵn";
+                                            color: root.can_clean_flatpak ? #f1f5f9 : #64748b;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            AppCheckBox {
+                                                checked <=> root.desktop_refresh;
+                                                checked_color: #2563eb;
+                                                unchecked_border: #94a3b8;
+                                            }
+                                        }
+                                        Text {
+                                            text: "Thêm mục 'Refresh' vào menu chuột phải Desktop (KDE Plasma)";
+                                            color: #f1f5f9;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            AppCheckBox {
+                                                checked <=> root.fast_compression;
+                                                checked_color: #2563eb;
+                                                unchecked_border: #94a3b8;
+                                            }
+                                        }
+                                        Text {
+                                            text: "Tối ưu hóa tốc độ ghi ảnh ISO (Nén nhanh)";
+                                            color: #f1f5f9;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Đổi tên bản phát hành Linux:";
+                                        color: #cbd5e1;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        LineEdit {
+                                            placeholder-text: "Nhập tên bản phát hành mới...";
+                                            text <=> root.new_release_name;
+                                        }
+                                        Button {
+                                            text: "Áp dụng";
+                                            clicked => { root.apply_release_clicked(); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Build Action Card
+                            Rectangle {
+                                width: 320px;
+                                border-radius: 10px;
+                                background: #1e293b;
+                                border-width: 1px;
+                                border-color: #334155;
+
+                                VerticalLayout {
+                                    padding: 18px;
+                                    spacing: 14px;
+                                    alignment: space-between;
+
+                                    VerticalLayout {
+                                        spacing: 8px;
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            alignment: start;
+                                            IconImage {
+                                                source: @image-url("icons/rocket.svg");
+                                                icon-width: 18px;
+                                                icon-height: 18px;
+                                                colorize: #38bdf8;
+                                            }
+                                            Text {
+                                                text: "Bắt Đầu Đóng Gói";
+                                                color: #f8fafc;
+                                                font-size: 15px;
+                                                font-weight: 700;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        Text {
+                                            text: "Tiến trình sẽ áp dụng tất cả thay đổi, gỡ gói, nạp gói mới, tái tạo SquashFS và cập nhật ISO bootable.";
+                                            color: #94a3b8;
+                                            font-size: 12px;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        spacing: 6px;
+                                        Text {
+                                            text: "Tiến độ: " + root.build_progress + "%";
+                                            color: #38bdf8;
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                        }
+                                        // Progress Bar Track
+                                        Rectangle {
+                                            height: 10px;
+                                            border-radius: 5px;
+                                            background: #0f172a;
+                                            // Bar Fill
+                                            Rectangle {
+                                                x: 0px;
+                                                y: 0px;
+                                                height: 10px;
+                                                width: parent.width * (root.build_progress / 100);
+                                                border-radius: 5px;
+                                                background: #3b82f6;
+                                            }
+                                        }
+                                        Text {
+                                            text: root.build_status;
+                                            color: #94a3b8;
+                                            font-size: 11px;
+                                            overflow: elide;
+                                        }
+                                    }
+
+                                    Button {
+                                        text: root.is_building ? "Đang xử lý..." : "BẮT ĐẦU TẠO ISO";
+                                        enabled: root.iso_loaded && !root.is_building;
+                                        clicked => { root.build_iso_clicked(); }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Live Log Console
+                        Rectangle {
+                            border-radius: 8px;
+                            background: #050914;
+                            border-width: 1px;
+                            border-color: #1e293b;
+
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 6px;
+
+                                Text {
+                                    text: "NHẬT KÝ TIẾN TRÌNH (LOG CONSOLE)";
+                                    color: #64748b;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                }
+
+                                ScrollView {
+                                    height: 180px;
+                                    Text {
+                                        text: root.log_text;
+                                        color: #38bdf8;
+                                        font-size: 12px;
+                                        font-family: "Consolas, Courier New, monospace";
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+
+                }
+// BOTTOM STATUS BAR
+                Rectangle {
+                    height: 32px;
+                    background: #1e293b;
+
+                    Rectangle {
+                        y: 0px;
+                        height: 1px;
+                        background: #334155;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        alignment: space-between;
+
+                        Text {
+                            text: root.status_bar_text;
+                            color: #94a3b8;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "Đã chọn: " + root.selected_count + " gói để gỡ | ISOLite Rust 0.2.0";
+                            color: #64748b;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+

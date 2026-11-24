@@ -1,0 +1,8 @@
+*.iso
+*.cache
+*.tmp
+*.pseudo
+/.buildtools
+.custom-iso-*/
+/target
+
