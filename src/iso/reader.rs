@@ -395,7 +395,7 @@ impl IsoReader {
 
     pub fn read_bytes(&mut self, path: &str) -> Option<Vec<u8>> {
         let item = self.find(path)?;
-        if item.size > 100 * 1024 * 1024 {
+        if item.size > 512 * 1024 * 1024 {
             return None;
         }
         let mut buf = vec![0u8; item.size as usize];

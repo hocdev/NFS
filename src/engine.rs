@@ -767,7 +767,11 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
                         local,
                     });
                     log("Đã cập nhật và nén lại /live/initrd.img (LZ4) với bộ ảnh Plymouth mới.");
+                } else {
+                    log("Cảnh báo: Không tìm thấy tệp Plymouth khớp trong /live/initrd.img để cập nhật.");
                 }
+            } else {
+                return Err("Không thể đọc /live/initrd.img từ ISO nguồn.".into());
             }
         }
         if plan.image.release != plan.original_release {
