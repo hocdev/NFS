@@ -3,6 +3,7 @@ pub struct FileDialog {
     title: String,
     name: String,
     filters: Vec<(String, Vec<String>)>,
+    owner: *mut std::ffi::c_void,
 }
 impl FileDialog {
     pub fn new() -> Self {
@@ -10,7 +11,12 @@ impl FileDialog {
             title: String::new(),
             name: String::new(),
             filters: Vec::new(),
+            owner: std::ptr::null_mut(),
         }
+    }
+    pub fn set_owner(mut self, owner: *mut std::ffi::c_void) -> Self {
+        self.owner = owner;
+        self
     }
     pub fn add_filter(mut self, name: &str, extensions: &[&str]) -> Self {
         self.filters.push((
@@ -64,6 +70,7 @@ impl FileDialog {
         let title: Vec<u16> = self.title.encode_utf16().chain([0]).collect();
         let mut ofn: OpenFileName = unsafe { std::mem::zeroed() };
         ofn.size = std::mem::size_of::<OpenFileName>() as u32;
+        ofn.owner = self.owner;
         ofn.filter = filter.as_ptr();
         ofn.file = buffer.as_mut_ptr();
         ofn.max_file = buffer.len() as u32;
@@ -101,7 +108,7 @@ impl FileDialog {
         let title: Vec<u16> = self.title.encode_utf16().chain([0]).collect();
         let mut display = [0u16; 260];
         let info = BrowseInfo {
-            owner: std::ptr::null_mut(),
+            owner: self.owner,
             root: std::ptr::null(),
             display: display.as_mut_ptr(),
             title: title.as_ptr(),

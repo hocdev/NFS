@@ -65,6 +65,8 @@ component AppCheckBox inherits Rectangle {
     background: root.checked ? (root.enabled ? root.checked_color : #64748b) : (root.enabled ? (chk_touch.has-hover ? #334155 : #1e293b) : #0f172a);
     border-width: root.checked ? 0px : 1.8px;
     border-color: root.enabled ? (chk_touch.has-hover ? #cbd5e1 : root.unchecked_border) : #334155;
+    animate background { duration: 150ms; easing: ease-out; }
+    animate border-color { duration: 150ms; easing: ease-out; }
 
     chk_touch := TouchArea {
         enabled: root.enabled;
@@ -75,13 +77,68 @@ component AppCheckBox inherits Rectangle {
         }
     }
 
-    if root.checked: Text {
-        text: "✓";
-        color: #ffffff;
-        font-size: 13px;
-        font-weight: 800;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    if root.checked: Path {
+        width: 11px;
+        height: 9px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: #ffffff;
+        stroke-width: 2.2px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        fill: transparent;
+        commands: "M 1 4.5 L 4 7.5 L 10 1";
+    }
+}
+
+component MinimizeButton inherits Rectangle {
+    callback clicked;
+
+    width: 32px;
+    height: 32px;
+    border-radius: 16px;
+    background: ta.has-hover ? #3b82f640 : transparent;
+    animate background { duration: 150ms; easing: ease-out; }
+
+    Rectangle {
+        width: 12px;
+        height: 2px;
+        border-radius: 1px;
+        background: ta.has-hover ? #3b82f6 : #94a3b8;
+        animate background { duration: 150ms; easing: ease-out; }
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component CloseButton inherits Rectangle {
+    callback clicked;
+
+    width: 32px;
+    height: 32px;
+    border-radius: 16px;
+    background: ta.has-hover ? #ef444440 : transparent;
+    animate background { duration: 150ms; easing: ease-out; }
+
+    Path {
+        width: 12px;
+        height: 12px;
+        stroke: ta.has-hover ? #ef4444 : #94a3b8;
+        stroke-width: 2px;
+        stroke-line-cap: round;
+        commands: "M 0 0 L 12 12 M 12 0 L 0 12";
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
     }
 }
 
@@ -93,9 +150,9 @@ export component MainWindow inherits Window {
     preferred-height: 760px;
     min-width: 1040px;
     min-height: 640px;
-    background: #0f172a;
+    background: transparent;
     no-frame: true;
-    resize-border-width: 5px;
+    resize-border-width: 6px;
     default-font-family: "Segoe UI, Inter, sans-serif";
 
     // Callbacks for custom titlebar window controls
@@ -157,163 +214,97 @@ export component MainWindow inherits Window {
     callback replace_package_clicked(string);
     callback reset_package_clicked(string);
 
-    VerticalLayout {
-        padding: 0px;
-        spacing: 0px;
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #0f172a;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: #334155;
+        clip: true;
 
-        // ==================== CUSTOM SLINT TITLEBAR ====================
-        Rectangle {
-            height: 38px;
-            background: #0f172a;
+        VerticalLayout {
+            padding: 16px;
+            padding-top: 8px;
+            spacing: 12px;
 
-            WindowMoveArea {
+            // ==================== CUSTOM SLINT TITLEBAR (installer_slint style) ====================
+            Rectangle {
+                height: 46px;
+
+                WindowMoveArea {
+                    width: 100%;
+                    height: 100%;
+                }
+
+                // Top-left App Icon
+                Rectangle {
+                    x: 2px;
+                    y: 7px;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 8px;
+                    background: #1e293b;
+                    border-width: 1px;
+                    border-color: #334155;
+
+                    IconImage {
+                        source: @image-url("icons/disc.svg");
+                        icon-width: 18px;
+                        icon-height: 18px;
+                        colorize: #60a5fa;
+                    }
+                }
+
+                // Centered Cyan Brand Title
+                Text {
+                    text: "ISOLite Studio";
+                    color: #4cc9f0;
+                    font-size: 22px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                // Top-right Window Controls (Minimize & Close)
                 HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 0px;
-                    alignment: space-between;
+                    alignment: end;
+                    padding-right: 2px;
+                    spacing: 14px;
 
-                    // App Brand & Window Title
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: start;
-
-                        IconImage {
-                            source: @image-url("icons/disc.svg");
-                            icon-width: 16px;
-                            icon-height: 16px;
-                            colorize: #38bdf8;
-                        }
-
-                        Text {
-                            text: "ISOLite - Trình Tùy Biến & Đóng Gói ISO Linux";
-                            color: #cbd5e1;
-                            font-size: 12px;
-                            font-weight: 600;
-                            vertical-alignment: center;
+                    VerticalLayout {
+                        alignment: center;
+                        MinimizeButton {
+                            clicked => { root.minimize_window(); }
                         }
                     }
 
-                    // Window Control Buttons (Minimize, Maximize, Close)
-                    HorizontalLayout {
-                        spacing: 0px;
-                        alignment: end;
-
-                        // Minimize
-                        Rectangle {
-                            width: 46px;
-                            height: 38px;
-                            background: min_btn.has-hover ? #334155 : transparent;
-                            min_btn := TouchArea {
-                                clicked => { root.minimize_window(); }
-                            }
-                            Image {
-                                source: @image-url("icons/win-min.svg");
-                                width: 14px;
-                                height: 14px;
-                                colorize: #94a3b8;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        // Maximize
-                        Rectangle {
-                            width: 46px;
-                            height: 38px;
-                            background: max_btn.has-hover ? #334155 : transparent;
-                            max_btn := TouchArea {
-                                clicked => { root.maximize_window(); }
-                            }
-                            Image {
-                                source: @image-url("icons/win-max.svg");
-                                width: 13px;
-                                height: 13px;
-                                colorize: #94a3b8;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        // Close
-                        Rectangle {
-                            width: 46px;
-                            height: 38px;
-                            background: close_btn.has-hover ? #dc2626 : transparent;
-                            close_btn := TouchArea {
-                                clicked => { root.close_window(); }
-                            }
-                            Image {
-                                source: @image-url("icons/win-close.svg");
-                                width: 13px;
-                                height: 13px;
-                                colorize: close_btn.has-hover ? #ffffff : #94a3b8;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
+                    VerticalLayout {
+                        alignment: center;
+                        CloseButton {
+                            clicked => { root.close_window(); }
                         }
                     }
                 }
             }
 
-            Rectangle {
-                y: parent.height - 1px;
-                height: 1px;
-                background: #334155;
-            }
-        }
+            // ==================== MAIN WORKSPACE ====================
+            HorizontalLayout {
+                padding: 0px;
+                spacing: 14px;
 
-        // ==================== MAIN WORKSPACE ====================
-        HorizontalLayout {
-            padding: 0px;
-            spacing: 0px;
+                // ==================== LEFT SIDEBAR ====================
+                Rectangle {
+                    width: 280px;
+                    border-radius: 12px;
+                    background: #1e293b;
+                    border-width: 1px;
+                    border-color: #334155;
+                    clip: true;
 
-            // ==================== LEFT SIDEBAR ====================
-            Rectangle {
-                width: 290px;
-                background: #1e293b;
-
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 16px;
-
-                    // Brand Header
-                    HorizontalLayout {
-                        height: 40px;
-                        spacing: 10px;
-                        alignment: start;
-
-                        Rectangle {
-                            width: 40px;
-                            height: 40px;
-                            border-radius: 8px;
-                            background: #3b82f6;
-
-                            Image {
-                                source: @image-url("icons/disc.svg");
-                                width: 22px;
-                                height: 22px;
-                                colorize: #ffffff;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 2px;
-                            Text {
-                                text: "ISOLite Studio";
-                                color: #f8fafc;
-                                font-size: 16px;
-                                font-weight: 700;
-                            }
-                            Text {
-                                text: "Bản Rust Siêu Tốc & Độc Lập";
-                                color: #94a3b8;
-                                font-size: 11px;
-                            }
-                        }
-                    }
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 14px;
 
                     // ISO Status Card
                     Rectangle {
@@ -372,7 +363,9 @@ export component MainWindow inherits Window {
                                     height: 32px;
                                     border-radius: 6px;
                                     background: btn_open_touch.has-hover ? #3b82f6 : #2563eb;
+                                    animate background { duration: 150ms; easing: ease-out; }
                                     btn_open_touch := TouchArea {
+                                        mouse-cursor: pointer;
                                         clicked => { root.open_iso_clicked(); }
                                     }
                                     HorizontalLayout {
@@ -399,8 +392,10 @@ export component MainWindow inherits Window {
                                     height: 32px;
                                     border-radius: 6px;
                                     background: root.iso_loaded ? (btn_ext_touch.has-hover ? #475569 : #334155) : #1e293b;
+                                    animate background { duration: 150ms; easing: ease-out; }
                                     btn_ext_touch := TouchArea {
                                         enabled: root.iso_loaded;
+                                        mouse-cursor: root.iso_loaded ? pointer : default;
                                         clicked => { root.extract_iso_clicked(); }
                                     }
                                     HorizontalLayout {
@@ -434,7 +429,9 @@ export component MainWindow inherits Window {
                             height: 42px;
                             border-radius: 8px;
                             background: root.current_view == 0 ? #3b82f6 : (nav0_touch.has-hover ? #334155 : transparent);
+                            animate background { duration: 150ms; easing: ease-out; }
                             nav0_touch := TouchArea {
+                                mouse-cursor: pointer;
                                 clicked => { root.current_view = 0; }
                             }
                             HorizontalLayout {
@@ -463,7 +460,9 @@ export component MainWindow inherits Window {
                             height: 42px;
                             border-radius: 8px;
                             background: root.current_view == 1 ? #3b82f6 : (nav1_touch.has-hover ? #334155 : transparent);
+                            animate background { duration: 150ms; easing: ease-out; }
                             nav1_touch := TouchArea {
+                                mouse-cursor: pointer;
                                 clicked => { root.current_view = 1; }
                             }
                             HorizontalLayout {
@@ -507,7 +506,8 @@ export component MainWindow inherits Window {
                         Rectangle {
                             height: 42px; border-radius: 8px;
                             background: root.current_view == 3 ? #3b82f6 : (language_nav.has-hover ? #334155 : transparent);
-                            language_nav := TouchArea { clicked => { root.current_view = 3; } }
+                            animate background { duration: 150ms; easing: ease-out; }
+                            language_nav := TouchArea { mouse-cursor: pointer; clicked => { root.current_view = 3; } }
                             HorizontalLayout { padding-left: 14px; padding-right: 14px; spacing: 12px; alignment: start;
                                 Text { width: 16px; horizontal-stretch: 0; text: "文"; font-size: 17px; color: #cbd5e1; vertical-alignment: center; }
                                 Text { horizontal-stretch: 0; text: "Ngôn ngữ"; font-size: 13px; color: #f1f5f9; vertical-alignment: center; }
@@ -519,7 +519,9 @@ export component MainWindow inherits Window {
                             height: 42px;
                             border-radius: 8px;
                             background: root.current_view == 2 ? #3b82f6 : (nav2_touch.has-hover ? #334155 : transparent);
+                            animate background { duration: 150ms; easing: ease-out; }
                             nav2_touch := TouchArea {
+                                mouse-cursor: pointer;
                                 clicked => { root.current_view = 2; }
                             }
                             HorizontalLayout {
@@ -552,8 +554,10 @@ export component MainWindow inherits Window {
                         height: 48px;
                         border-radius: 10px;
                         background: root.iso_loaded ? (b_touch.has-hover ? #1d4ed8 : #2563eb) : #475569;
+                        animate background { duration: 150ms; easing: ease-out; }
                         b_touch := TouchArea {
                             enabled: root.iso_loaded && !root.is_building;
+                            mouse-cursor: (root.iso_loaded && !root.is_building) ? pointer : default;
                             clicked => {
                                 root.current_view = 2;
                                 root.build_iso_clicked();
@@ -581,14 +585,21 @@ export component MainWindow inherits Window {
             }
 
             // ==================== MAIN CONTENT AREA ====================
-            VerticalLayout {
-                padding: 0px;
-                spacing: 0px;
+            Rectangle {
+                border-radius: 12px;
+                background: #0f172a;
+                border-width: 1px;
+                border-color: #334155;
+                clip: true;
 
-                // TOP HEADER BAR
-                Rectangle {
-                    height: 72px;
-                    background: #1e293b;
+                VerticalLayout {
+                    padding: 0px;
+                    spacing: 0px;
+
+                    // TOP HEADER BAR
+                    Rectangle {
+                        height: 64px;
+                        background: #1e293b;
 
                     Rectangle {
                         y: parent.height - 1px;
@@ -678,7 +689,10 @@ export component MainWindow inherits Window {
                                     background: root.package_tab == 1 ? #2563eb : (tab1_touch.has-hover ? #334155 : #1e293b);
                                     border-width: 1px;
                                     border-color: root.package_tab == 1 ? #3b82f6 : #475569;
+                                    animate background { duration: 150ms; easing: ease-out; }
+                                    animate border-color { duration: 150ms; easing: ease-out; }
                                     tab1_touch := TouchArea {
+                                        mouse-cursor: pointer;
                                         clicked => {
                                             root.package_tab = 1;
                                             root.filter_packages(1, root.search_text);
@@ -704,7 +718,10 @@ export component MainWindow inherits Window {
                                     background: root.package_tab == 2 ? #2563eb : (tab2_touch.has-hover ? #334155 : #1e293b);
                                     border-width: 1px;
                                     border-color: root.package_tab == 2 ? #3b82f6 : #475569;
+                                    animate background { duration: 150ms; easing: ease-out; }
+                                    animate border-color { duration: 150ms; easing: ease-out; }
                                     tab2_touch := TouchArea {
+                                        mouse-cursor: pointer;
                                         clicked => {
                                             root.package_tab = 2;
                                             root.filter_packages(2, root.search_text);
@@ -743,7 +760,9 @@ export component MainWindow inherits Window {
                                 background: sel_all_btn.has-hover ? #334155 : #1e293b;
                                 border-width: 1px;
                                 border-color: #475569;
+                                animate background { duration: 150ms; easing: ease-out; }
                                 sel_all_btn := TouchArea {
+                                    mouse-cursor: pointer;
                                     clicked => { root.select_all_packages(true); }
                                 }
                                 HorizontalLayout {
@@ -773,7 +792,9 @@ export component MainWindow inherits Window {
                                 background: desel_btn.has-hover ? #334155 : #1e293b;
                                 border-width: 1px;
                                 border-color: #475569;
+                                animate background { duration: 150ms; easing: ease-out; }
                                 desel_btn := TouchArea {
+                                    mouse-cursor: pointer;
                                     clicked => { root.select_all_packages(false); }
                                 }
                                 HorizontalLayout {
@@ -981,8 +1002,11 @@ export component MainWindow inherits Window {
                                                     background: replace_touch.has-hover ? #059669 : #1e293b;
                                                     border-width: 1px;
                                                     border-color: replace_touch.has-hover ? #34d399 : #475569;
+                                                    animate background { duration: 150ms; easing: ease-out; }
+                                                    animate border-color { duration: 150ms; easing: ease-out; }
 
                                                     replace_touch := TouchArea {
+                                                        mouse-cursor: pointer;
                                                         clicked => { root.replace_package_clicked(item.name); }
                                                     }
 
@@ -1019,8 +1043,11 @@ export component MainWindow inherits Window {
                                                     background: reset_touch.has-hover ? #dc2626 : #1e293b;
                                                     border-width: 1px;
                                                     border-color: reset_touch.has-hover ? #f87171 : #475569;
+                                                    animate background { duration: 150ms; easing: ease-out; }
+                                                    animate border-color { duration: 150ms; easing: ease-out; }
 
                                                     reset_touch := TouchArea {
+                                                        mouse-cursor: pointer;
                                                         clicked => { root.reset_package_clicked(item.name); }
                                                     }
 
@@ -1057,8 +1084,11 @@ export component MainWindow inherits Window {
                                                     background: export_touch.has-hover ? #2563eb : #1e293b;
                                                     border-width: 1px;
                                                     border-color: export_touch.has-hover ? #60a5fa : #475569;
+                                                    animate background { duration: 150ms; easing: ease-out; }
+                                                    animate border-color { duration: 150ms; easing: ease-out; }
 
                                                     export_touch := TouchArea {
+                                                        mouse-cursor: pointer;
                                                         clicked => { root.export_package_clicked(item.name); }
                                                     }
 
@@ -1106,7 +1136,9 @@ export component MainWindow inherits Window {
                                 height: 36px;
                                 border-radius: 6px;
                                 background: add_pkg_touch.has-hover ? #3b82f6 : #2563eb;
+                                animate background { duration: 150ms; easing: ease-out; }
                                 add_pkg_touch := TouchArea {
+                                    mouse-cursor: pointer;
                                     clicked => { root.add_deb_clicked(); }
                                 }
                                 HorizontalLayout {
@@ -1134,8 +1166,10 @@ export component MainWindow inherits Window {
                                 height: 36px;
                                 border-radius: 6px;
                                 background: root.added_packages.length > 0 ? (clear_touch.has-hover ? #b91c1c : #dc2626) : #334155;
+                                animate background { duration: 150ms; easing: ease-out; }
                                 clear_touch := TouchArea {
                                     enabled: root.added_packages.length > 0;
+                                    mouse-cursor: root.added_packages.length > 0 ? pointer : default;
                                     clicked => { root.clear_debs_clicked(); }
                                 }
                                 HorizontalLayout {
@@ -1435,6 +1469,7 @@ export component MainWindow inherits Window {
                                                 width: parent.width * (root.build_progress / 100);
                                                 border-radius: 5px;
                                                 background: #3b82f6;
+                                                animate width { duration: 200ms; easing: ease-out; }
                                             }
                                         }
                                         Text {
@@ -1522,40 +1557,49 @@ export component MainWindow inherits Window {
                         }
                         Text { text: "Dữ liệu được tích hợp trực tiếp vào hệ thống. Bản dịch của ứng dụng phụ thuộc các tệp dịch có sẵn trong ISO."; color: #94a3b8; font-size: 11px; wrap: word-wrap; }
                     }
-
                 }
-// BOTTOM STATUS BAR
-                Rectangle {
-                    height: 32px;
-                    background: #1e293b;
+            }
+        }
+        }
 
-                    Rectangle {
-                        y: 0px;
-                        height: 1px;
-                        background: #334155;
+        // ==================== ROUNDED BOTTOM STATUS BAR (installer_slint style) ====================
+        Rectangle {
+            height: 36px;
+            border-radius: 8px;
+            background: #1e293b;
+            border-width: 1px;
+            border-color: #334155;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                alignment: space-between;
+
+                Text {
+                    text: "Đã chọn: " + root.selected_count + " gói để gỡ | ISOLite Rust 0.4.0";
+                    color: #94a3b8;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "Trạng thái:";
+                        color: #94a3b8;
+                        font-size: 12px;
+                        font-weight: 700;
+                        vertical-alignment: center;
                     }
-
-                    HorizontalLayout {
-                        padding-left: 16px;
-                        padding-right: 16px;
-                        alignment: space-between;
-
-                        Text {
-                            text: root.status_bar_text;
-                            color: #94a3b8;
-                            font-size: 12px;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: "Đã chọn: " + root.selected_count + " gói để gỡ | ISOLite Rust 0.4.0";
-                            color: #64748b;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                        }
+                    Text {
+                        text: root.status_bar_text;
+                        color: #f8fafc;
+                        font-size: 12px;
+                        vertical-alignment: center;
                     }
                 }
             }
+        }
         }
     }
 }

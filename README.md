@@ -1,6 +1,6 @@
 # ISOLite 0.4 — Rust + Slint 1.18
 
-Giao diện giữ Slint **1.18.1**. Ngoài Slint và các phụ thuộc bắt buộc của Slint, backend chỉ dùng thư viện chuẩn Rust: đọc/ghi ISO9660, CRC32/CRC64, MD5, XZ/LZMA2 và SquashFS. Không gọi 7-Zip, xorriso, mksquashfs, WSL hoặc DLL nén ở máy Windows. Các công cụ độc lập chỉ được dùng trong quá trình phát triển để đối chiếu kết quả.
+Giao diện dùng Slint **1.18.1** (`femtovg` + `winit`) với form bo góc mượt và hiệu ứng chuyển động. Ngoài Slint và cây phụ thuộc của Slint, toàn bộ backend vẫn chỉ dùng thư viện chuẩn Rust: đọc/ghi ISO9660, CRC32/CRC64, MD5, XZ/LZMA2 và SquashFS. Không gọi 7-Zip, xorriso, mksquashfs, WSL hoặc DLL nén ở máy Windows. Các công cụ độc lập chỉ được dùng trong quá trình phát triển để đối chiếu kết quả.
 
 Trình chỉnh sửa CachyOS Hello, callback, trình tải nguồn và backend phụ thuộc backhand/liblzma đã được loại bỏ. Slint vẫn có cây phụ thuộc của riêng nó; đây không phải dự án không có bất kỳ crate nào.
 
@@ -52,7 +52,7 @@ Dữ liệu LC_* đã biên dịch, bản dịch có sẵn và LANG/LANGUAGE đ�
 
 Đo cùng ISO: trước 6,20 s; sau tối ưu lần đầu 2,08 s; cache khoảng 0,01 s. Thời gian phụ thuộc ổ đĩa và máy. Widget dùng bảng màu tối, mục ngôn ngữ có lựa chọn rõ ràng thay cho ô nhập locale.
 
-`build.rs` ở gốc đã xóa. Cargo tự chạy `build-support/main.rs`; icon ICO được chuyển thành tài nguyên COFF bằng Rust chuẩn, nhúng vào PE trong quá trình link, không cần winres/windres.
+`build.rs` ở gốc biên dịch bằng Rust chuẩn: sinh registry ngôn ngữ và chuyển icon ICO + manifest thành tài nguyên COFF, nhúng thẳng vào PE khi link, không cần winres/windres hay thư mục `build-support`.
 
 ## SquashFS và an toàn
 
@@ -71,7 +71,7 @@ NFS có chữ ký riêng `/.md5sum.txt`. Thay nội dung làm chữ ký nhà ph�
 
 ## Biên dịch
 
-Cần Rust và linker tương ứng. MSVC cần Visual C++ Build Tools; GNU cần GCC/MinGW tương thích. Slint build-time là ngoại lệ đã được cho phép.
+Cần Rust và linker tương ứng. MSVC cần Visual C++ Build Tools; GNU cần GCC/MinGW tương thích. Slint build-time được biên dịch qua `build.rs` ở gốc (không cần `build-support`).
 
 ```powershell
 cargo check

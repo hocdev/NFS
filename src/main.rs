@@ -53,6 +53,25 @@ mod win32_icon {
         fn SendMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
         fn GetWindowLongW(hWnd: HWND, nIndex: i32) -> i32;
         fn SetWindowLongW(hWnd: HWND, nIndex: i32, dwNewLong: i32) -> i32;
+        fn SetWindowPos(
+            hWnd: HWND,
+            hWndInsertAfter: HWND,
+            X: i32,
+            Y: i32,
+            cx: i32,
+            cy: i32,
+            uFlags: u32,
+        ) -> BOOL;
+    }
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: HWND,
+            dwAttribute: u32,
+            pvAttribute: *const std::ffi::c_void,
+            cbAttribute: u32,
+        ) -> i32;
     }
 
     const WM_SETICON: u32 = 0x0080;
@@ -61,8 +80,16 @@ mod win32_icon {
     const IMAGE_ICON: u32 = 1;
     const LR_DEFAULTSIZE: u32 = 0x0040;
     const LR_SHARED: u32 = 0x8000;
+    const GWL_STYLE: i32 = -16;
     const GWL_EXSTYLE: i32 = -20;
+    const WS_MINIMIZEBOX: i32 = 0x00020000;
+    const WS_SYSMENU: i32 = 0x00080000;
+    const WS_EX_TOPMOST: i32 = 0x00000008;
     const WS_EX_APPWINDOW: i32 = 0x00040000;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
 
     unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let mut buffer = [0u16; 512];
@@ -71,11 +98,35 @@ mod win32_icon {
             let title = String::from_utf16_lossy(&buffer[..len as usize]);
             if title.contains("ISOLite") {
                 let h_icon = lparam as HICON;
-                SendMessageW(hwnd, WM_SETICON, ICON_BIG, h_icon as LPARAM);
-                SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_icon as LPARAM);
+                if !h_icon.is_null() {
+                    SendMessageW(hwnd, WM_SETICON, ICON_BIG, h_icon as LPARAM);
+                    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_icon as LPARAM);
+                }
+                let style = GetWindowLongW(hwnd, GWL_STYLE);
+                SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_SYSMENU);
                 let ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
-                SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_APPWINDOW);
-                return 1;
+                SetWindowLongW(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    (ex & !WS_EX_TOPMOST) | WS_EX_APPWINDOW,
+                );
+                SetWindowPos(
+                    hwnd,
+                    -2isize as HWND,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                );
+                let preference: u32 = 2; // DWMWCP_ROUND
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    33,
+                    &preference as *const u32 as *const std::ffi::c_void,
+                    4,
+                );
+                return 0;
             }
         }
         1
@@ -95,9 +146,7 @@ mod win32_icon {
             if icon.is_null() {
                 icon = LoadIconW(hinst, 1 as *const u16);
             }
-            if !icon.is_null() {
-                EnumWindows(enum_windows_callback, icon as LPARAM);
-            }
+            EnumWindows(enum_windows_callback, icon as LPARAM);
         }
     }
 }
@@ -1120,6 +1169,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "windows")]
     {
         win32_icon::apply_taskbar_icon();
+        slint::Timer::single_shot(std::time::Duration::from_millis(50), || {
+            win32_icon::apply_taskbar_icon();
+        });
         slint::Timer::single_shot(std::time::Duration::from_millis(250), || {
             win32_icon::apply_taskbar_icon();
         });
