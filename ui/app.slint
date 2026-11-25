@@ -286,6 +286,9 @@ export component MainWindow inherits Window {
     in-out property <bool> remove_updatepool_office: true;
     in-out property <string> signing_key_text: "Không ký lại (giữ chữ ký gốc)";
     in-out property <bool> has_signing_key: false;
+    in-out property <string> branding_dir_text: "Không dùng (giữ ảnh gốc)";
+    in-out property <bool> has_branding_dir: false;
+    in-out property <bool> has_default_branding_dir: false;
 
     in-out property <int> build_progress: 0;
     in-out property <string> build_status: "Sẵn sàng";
@@ -325,6 +328,9 @@ export component MainWindow inherits Window {
     callback select_signing_key_clicked();
     callback generate_signing_key_clicked();
     callback clear_signing_key_clicked();
+    callback select_branding_clicked();
+    callback use_default_branding_clicked();
+    callback clear_branding_clicked();
 
     Rectangle {
         width: 100%;
@@ -1602,6 +1608,81 @@ export component MainWindow inherits Window {
                                         }
                                     }
 
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+
+                                        Text {
+                                            text: "Thư mục ảnh / Branding:";
+                                            color: #cbd5e1;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: root.branding_dir_text;
+                                            color: root.has_branding_dir ? #4ade80 : #94a3b8;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Rectangle {
+                                            height: 26px;
+                                            border-radius: 6px;
+                                            background: sel_brand_ta.has-hover ? #334155 : #0f172a;
+                                            border-width: 1px;
+                                            border-color: #475569;
+                                            animate background { duration: 150ms; easing: ease-out; }
+                                            sel_brand_ta := TouchArea {
+                                                enabled: !root.is_building;
+                                                mouse-cursor: !root.is_building ? pointer : default;
+                                                clicked => { root.select_branding_clicked(); }
+                                            }
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                Text { text: "Chọn thư mục..."; color: #e2e8f0; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                            }
+                                        }
+
+                                        if root.has_default_branding_dir && !root.has_branding_dir: Rectangle {
+                                            height: 26px;
+                                            border-radius: 6px;
+                                            background: def_brand_ta.has-hover ? #1d4ed8 : #2563eb;
+                                            animate background { duration: 150ms; easing: ease-out; }
+                                            def_brand_ta := TouchArea {
+                                                enabled: !root.is_building;
+                                                mouse-cursor: !root.is_building ? pointer : default;
+                                                clicked => { root.use_default_branding_clicked(); }
+                                            }
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                Text { text: "Dùng branding_edit"; color: #ffffff; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                            }
+                                        }
+
+                                        if root.has_branding_dir: Rectangle {
+                                            height: 26px;
+                                            border-radius: 6px;
+                                            background: clr_brand_ta.has-hover ? #b91c1c : #dc2626;
+                                            animate background { duration: 150ms; easing: ease-out; }
+                                            clr_brand_ta := TouchArea {
+                                                enabled: !root.is_building;
+                                                mouse-cursor: !root.is_building ? pointer : default;
+                                                clicked => { root.clear_branding_clicked(); }
+                                            }
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                Text { text: "Bỏ"; color: #ffffff; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+
                                     Text {
                                         text: "Tự động cập nhật /etc/os-release, boot menu, md5sum và cấu trúc ISO. Bộ nén, quyền Linux và metadata hệ thống được đảm bảo nguyên vẹn.";
                                         color: #94a3b8;
@@ -1710,7 +1791,7 @@ export component MainWindow inherits Window {
                                 }
 
                                 ScrollView {
-                                    height: 180px;
+                                    height: 150px;
                                     VerticalLayout {
                                         width: parent.visible-width;
                                         alignment: start;

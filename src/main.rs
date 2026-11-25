@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 mod checksum;
 mod dialog;
 mod engine;
+mod initrd;
 mod iso;
 mod language;
 mod language_payload;
@@ -351,7 +352,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
     if args.get(1).is_some_and(|s| s == "--help" || s == "-h") {
-        println!("ISOLite\ninspect <input.iso>\nextract <input.iso> <folder>\nbuild <input.iso> <output.iso> [--locale vi_VN.UTF-8] [--default-locale vi_VN.UTF-8] [--remove package] [--deb file.deb] [--language-deb file.deb] [--sign-key private.pem]");
+        println!("ISOLite\ninspect <input.iso>\nextract <input.iso> <folder>\nbuild <input.iso> <output.iso> [--locale vi_VN.UTF-8] [--default-locale vi_VN.UTF-8] [--remove package] [--deb file.deb] [--language-deb file.deb] [--branding folder] [--sign-key private.pem]");
         return Ok(());
     }
     // CLI Mode
@@ -417,6 +418,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 remove_updatepool_office: true,
                 replaced_folders: BTreeMap::new(),
                 signing_key: None,
+                branding_dir: None,
             };
 
             let mut i = 4;
@@ -456,6 +458,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         plan.signing_key = Some(PathBuf::from(value));
                         i += 1;
                     }
+                    "--branding" => {
+                        let value = args.get(i + 1).ok_or("Thiếu đường dẫn thư mục ảnh branding")?;
+                        plan.branding_dir = Some(PathBuf::from(value));
+                        i += 1;
+                    }
                     _ => return Err(format!("Tùy chọn không hỗ trợ: {}", args[i]).into()),
                 }
                 i += 1;
@@ -482,6 +489,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let selected_languages = Arc::new(Mutex::new(BTreeSet::<String>::new()));
     let replaced_folders = Arc::new(Mutex::new(BTreeMap::<String, PathBuf>::new()));
     let signing_key = Arc::new(Mutex::new(Option::<PathBuf>::None));
+    let branding_dir = Arc::new(Mutex::new(Option::<PathBuf>::None));
+    if PathBuf::from("branding_edit").is_dir() {
+        main_window.set_has_default_branding_dir(true);
+    }
     let sort_column = Arc::new(Mutex::new(0i32));
     let sort_ascending = Arc::new(Mutex::new(true));
     // 1. Open ISO
@@ -1149,6 +1160,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // 11c. Branding Folder Repack
+    {
+        let ui_weak = ui_handle.clone();
+        let branding_dir = branding_dir.clone();
+        main_window.on_select_branding_clicked(move || {
+            if let Some(dir) = dialog::FileDialog::new().pick_folder() {
+                let label = dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| dir.display().to_string());
+                *branding_dir.lock().unwrap() = Some(dir.clone());
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_has_branding_dir(true);
+                    ui.set_branding_dir_text(label.into());
+                    let mut log = ui.get_log_text().to_string();
+                    log += &format!("🖼 Đã chọn thư mục ảnh/branding: {}\n", dir.display());
+                    ui.set_log_text(log.into());
+                    ui.set_status_bar_text("Đã chọn thư mục ảnh để nén vào ISO.".into());
+                }
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui_handle.clone();
+        let branding_dir = branding_dir.clone();
+        main_window.on_use_default_branding_clicked(move || {
+            let dir = PathBuf::from("branding_edit");
+            if dir.is_dir() {
+                let abs = std::fs::canonicalize(&dir).unwrap_or(dir);
+                *branding_dir.lock().unwrap() = Some(abs.clone());
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_has_branding_dir(true);
+                    ui.set_branding_dir_text("branding_edit".into());
+                    let mut log = ui.get_log_text().to_string();
+                    log += &format!("🖼 Đã gắn bộ ảnh tiếng Anh tại: {}\n", abs.display());
+                    ui.set_log_text(log.into());
+                    ui.set_status_bar_text("Sẽ nén bộ ảnh branding_edit vào ISO mới.".into());
+                }
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui_handle.clone();
+        let branding_dir = branding_dir.clone();
+        main_window.on_clear_branding_clicked(move || {
+            *branding_dir.lock().unwrap() = None;
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_has_branding_dir(false);
+                ui.set_branding_dir_text("Không dùng (giữ ảnh gốc)".into());
+                ui.set_status_bar_text("Đã bỏ chọn thư mục ảnh branding.".into());
+            }
+        });
+    }
+
     // 12. Build ISO Action
     {
         let ui_weak = ui_handle.clone();
@@ -1158,6 +1225,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let selected_languages = selected_languages.clone();
         let replaced_folders = replaced_folders.clone();
         let signing_key = signing_key.clone();
+        let branding_dir = branding_dir.clone();
 
         main_window.on_build_iso_clicked(move || {
             let cur = current_image.lock().unwrap().clone();
@@ -1215,6 +1283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             remove_updatepool_office,
                             replaced_folders: replace_map,
                             signing_key: signing_key.lock().unwrap().clone(),
+                            branding_dir: branding_dir.lock().unwrap().clone(),
                         };
 
                         std::thread::spawn(move || {

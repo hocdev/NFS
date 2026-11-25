@@ -38,6 +38,7 @@ pub struct Plan {
     pub clean_flatpak: bool,
     pub remove_updatepool_office: bool,
     pub signing_key: Option<PathBuf>,
+    pub branding_dir: Option<PathBuf>,
 }
 
 impl Plan {
@@ -55,6 +56,7 @@ impl Plan {
             clean_flatpak: false,
             remove_updatepool_office: true,
             signing_key: None,
+            branding_dir: None,
         }
     }
 }

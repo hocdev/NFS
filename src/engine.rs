@@ -487,6 +487,43 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             log(&format!("Áp dụng tệp thay thế: {name}"));
             collect_overlay(folder, folder, &mut added)?;
         }
+        let mut branding_iso_files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut initrd_updates: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        if let Some(branding_root) = &plan.branding_dir {
+            if !branding_root.is_dir() {
+                return Err(format!(
+                    "Không tìm thấy thư mục branding: {}",
+                    branding_root.display()
+                ));
+            }
+            let sq_sub = branding_root.join("squashfs");
+            let iso_sub = branding_root.join("iso_root");
+            let initrd_sub = branding_root.join("initrd");
+            let mut branding_squash = BTreeMap::new();
+            if sq_sub.is_dir() {
+                collect_overlay(&sq_sub, &sq_sub, &mut branding_squash)?;
+            } else if !iso_sub.is_dir() && !initrd_sub.is_dir() {
+                collect_overlay(branding_root, branding_root, &mut branding_squash)?;
+            }
+            if !branding_squash.is_empty() {
+                log(&format!(
+                    "Đang nạp {} tệp ảnh/branding vào SquashFS...",
+                    branding_squash.len()
+                ));
+                for (k, v) in branding_squash {
+                    if k.starts_with("usr/share/plymouth/") {
+                        initrd_updates.insert(k.clone(), v.clone());
+                    }
+                    added.insert(k, v);
+                }
+            }
+            if initrd_sub.is_dir() {
+                collect_overlay(&initrd_sub, &initrd_sub, &mut initrd_updates)?;
+            }
+            if iso_sub.is_dir() {
+                collect_overlay(&iso_sub, &iso_sub, &mut branding_iso_files)?;
+            }
+        }
         stage_packages(plan.debs.iter().cloned(), &mut added)?;
         let abi = inv
             .records
@@ -635,6 +672,37 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             iso_path: plan.image.squash_iso_path.clone(),
             local: root_new.clone(),
         }];
+        for (idx, (rel, data)) in branding_iso_files.iter().enumerate() {
+            let candidate = format!("/{}", rel.trim_start_matches('/'));
+            if let Some((exact_iso_path, _)) = source_files
+                .iter()
+                .find(|(p, _)| p.eq_ignore_ascii_case(&candidate))
+            {
+                let local = stage.join(format!("branding-iso-{idx}"));
+                fs::write(&local, data).map_err(|e| e.to_string())?;
+                replacements.push(IsoReplacement {
+                    iso_path: exact_iso_path.clone(),
+                    local,
+                });
+                log(&format!("Đã thay thế tệp trên ISO gốc: {exact_iso_path}"));
+            }
+        }
+        if !initrd_updates.is_empty() && source_iso.find("/live/initrd.img").is_some() {
+            progress(50, "Đang cập nhật ảnh Plymouth trong /live/initrd.img...");
+            if let Some(orig_initrd) = source_iso.read_bytes("/live/initrd.img") {
+                if let Some(patched_initrd) =
+                    crate::initrd::patch_initrd_lz4_cpio(&orig_initrd, &initrd_updates)?
+                {
+                    let local = stage.join("initrd.img");
+                    fs::write(&local, patched_initrd).map_err(|e| e.to_string())?;
+                    replacements.push(IsoReplacement {
+                        iso_path: "/live/initrd.img".into(),
+                        local,
+                    });
+                    log("Đã cập nhật và nén lại /live/initrd.img (LZ4) với bộ ảnh Plymouth mới.");
+                }
+            }
+        }
         if plan.image.release != plan.original_release {
             if let Some(old) = source_iso.read_text("/.disk/info") {
                 let new = if old.contains(&plan.original_release) {
