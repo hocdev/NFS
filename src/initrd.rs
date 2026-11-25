@@ -112,10 +112,11 @@ fn encode_lz4_block(src: &[u8]) -> Vec<u8> {
         return out;
     }
     let mut table = vec![u32::MAX; HASH_SIZE];
-    let limit = n - 5;
+    let mflimit = n - 12;
+    let match_end_limit = n - 5;
     let mut anchor = 0usize;
     let mut ip = 0usize;
-    while ip + 4 <= limit {
+    while ip <= mflimit {
         let v = u32::from_le_bytes(src[ip..ip + 4].try_into().unwrap());
         let h = (v.wrapping_mul(2654435761u32) >> (32 - HASH_LOG)) as usize;
         let cand = table[h];
@@ -125,7 +126,7 @@ fn encode_lz4_block(src: &[u8]) -> Vec<u8> {
             let dist = ip - ref_idx;
             if dist > 0 && dist <= 65535 && src[ref_idx..ref_idx + 4] == src[ip..ip + 4] {
                 let mut mlen = 4usize;
-                let max_match = limit - ip;
+                let max_match = match_end_limit - ip;
                 while mlen < max_match && src[ref_idx + mlen] == src[ip + mlen] {
                     mlen += 1;
                 }
@@ -319,5 +320,48 @@ mod tests {
         let decoded = lz4_legacy_decode(&updated).unwrap();
         assert!(decoded.windows(b"NEW_ENGLISH_PNG_CONTENT".len()).any(|w| w == b"NEW_ENGLISH_PNG_CONTENT"));
         assert!(!decoded.windows(b"OLD_PNG_DATA".len()).any(|w| w == b"OLD_PNG_DATA"));
+    }
+
+    #[test]
+    fn lz4_legacy_respects_mflimit_12() {
+        let mut src = Vec::new();
+        for _ in 0..40 {
+            src.extend_from_slice(b"ABCD1234EFGH5678");
+        }
+        // Append trailing repeated pattern right up to the end
+        src.extend_from_slice(b"ABCD1234EFGH5678");
+        let blk = encode_lz4_block(&src);
+        let mut decoded = Vec::new();
+        decode_lz4_block(&blk, &mut decoded).unwrap();
+        assert_eq!(decoded, src);
+
+        let mut i = 0usize;
+        let mut op = 0usize;
+        let mut last_match_start = 0usize;
+        let mut last_match_end = 0usize;
+        while i < blk.len() {
+            let tok = blk[i];
+            i += 1;
+            let mut lit = (tok >> 4) as usize;
+            if lit == 15 {
+                while { let b = blk[i]; i += 1; lit += b as usize; b == 255 } {}
+            }
+            i += lit;
+            op += lit;
+            if i >= blk.len() {
+                break;
+            }
+            i += 2;
+            let mut mlen = (tok & 0x0f) as usize;
+            if mlen == 15 {
+                while { let b = blk[i]; i += 1; mlen += b as usize; b == 255 } {}
+            }
+            mlen += 4;
+            last_match_start = op;
+            op += mlen;
+            last_match_end = op;
+        }
+        assert!(src.len() - last_match_start >= 12);
+        assert!(src.len() - last_match_end >= 5);
     }
 }
