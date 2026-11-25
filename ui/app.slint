@@ -1,4 +1,4 @@
-import { Palette, Button, ComboBox, CheckBox, LineEdit, ScrollView, ListView, HorizontalBox, VerticalBox } from "std-widgets.slint";
+import { Palette, Button, LineEdit, ScrollView, ListView, HorizontalBox, VerticalBox } from "std-widgets.slint";
 
 export struct PackageItem {
     name: string,
@@ -139,6 +139,113 @@ component CloseButton inherits Rectangle {
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+    }
+}
+
+component AppComboBox inherits Rectangle {
+    in property <[string]> model;
+    in-out property <int> current-index: 0;
+    in property <bool> enabled: true;
+
+    height: 36px;
+    border-radius: 6px;
+    background: root.enabled ? (ta.has-hover ? #334155 : #0f172a) : #1e293b;
+    border-width: 1px;
+    border-color: root.enabled ? (ta.has-hover ? #3b82f6 : #475569) : #334155;
+    animate background { duration: 150ms; easing: ease-out; }
+    animate border-color { duration: 150ms; easing: ease-out; }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+
+        Text {
+            text: root.current-index >= 0 && root.current-index < root.model.length
+                ? root.model[root.current-index]
+                : "";
+            color: root.enabled ? #f1f5f9 : #64748b;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Path {
+                width: 10px;
+                height: 6px;
+                stroke: root.enabled ? #94a3b8 : #475569;
+                stroke-width: 1.8px;
+                stroke-line-cap: round;
+                stroke-line-join: round;
+                fill: transparent;
+                commands: "M 0 0 L 5 5 L 10 0";
+            }
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            popup.show();
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 4px;
+        width: root.width;
+        height: min(260px, max(42px, root.model.length * 34px + 10px));
+
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
+            background: #1e293b;
+            border-width: 1px;
+            border-color: #475569;
+            clip: true;
+
+            ScrollView {
+                width: 100%;
+                height: 100%;
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 2px;
+                    for item[idx] in root.model: Rectangle {
+                        height: 32px;
+                        border-radius: 6px;
+                        background: idx == root.current-index
+                            ? #2563eb
+                            : (item_ta.has-hover ? #334155 : transparent);
+                        animate background { duration: 120ms; easing: ease-out; }
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            Text {
+                                text: item;
+                                color: idx == root.current-index ? #ffffff : #e2e8f0;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+
+                        item_ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.current-index = idx;
+                                popup.close();
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1541,7 +1648,7 @@ export component MainWindow inherits Window {
                             VerticalLayout { padding: 16px; spacing: 10px;
                                 HorizontalLayout { height: 36px; spacing: 14px;
                                     Text { width: 215px; text: "Giao diện mặc định của ISO"; color: #f1f5f9; font-size: 13px; vertical-alignment: center; }
-                                    ComboBox { width: 310px; height: 36px; model: root.locale_labels; current-index <=> root.language_index; enabled: root.iso_loaded && !root.is_building; }
+                                    AppComboBox { width: 310px; height: 36px; model: root.locale_labels; current-index <=> root.language_index; enabled: root.iso_loaded && !root.is_building; }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
                                 }
                                 Text { text: "Chọn Tiếng Anh để ISO mới khởi động bằng tiếng Anh thay cho tiếng Trung."; color: #94a3b8; font-size: 12px; wrap: word-wrap; }
