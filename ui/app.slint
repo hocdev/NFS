@@ -945,7 +945,7 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 padding-left: 14px;
                                 padding-right: 36px;
-                                spacing: 8px;
+                                spacing: 12px;
 
                                 Text {
                                     width: 32px;
@@ -961,6 +961,7 @@ export component MainWindow inherits Window {
                                     horizontal-stretch: 1;
                                     min-width: 60px;
                                     name_hdr := TouchArea {
+                                        mouse-cursor: pointer;
                                         clicked => { root.sort_packages(0); }
                                     }
                                     HorizontalLayout {
@@ -1003,8 +1004,9 @@ export component MainWindow inherits Window {
 
                                 // Dung lượng (Sortable)
                                 Rectangle {
-                                    width: 65px;
+                                    width: 96px;
                                     size_hdr := TouchArea {
+                                        mouse-cursor: pointer;
                                         clicked => { root.sort_packages(1); }
                                     }
                                     HorizontalLayout {
@@ -1057,7 +1059,7 @@ export component MainWindow inherits Window {
                                     HorizontalLayout {
                                         padding-left: 14px;
                                         padding-right: 12px;
-                                        spacing: 8px;
+                                        spacing: 12px;
 
                                         VerticalLayout {
                                             width: 32px;
@@ -1101,7 +1103,7 @@ export component MainWindow inherits Window {
                                         }
 
                                         Text {
-                                            width: 65px;
+                                            width: 96px;
                                             text: item.size_str;
                                             color: #e2e8f0;
                                             font-size: 12px;
@@ -1629,11 +1631,19 @@ export component MainWindow inherits Window {
 
                                 ScrollView {
                                     height: 180px;
-                                    Text {
-                                        text: root.log_text;
-                                        color: #38bdf8;
-                                        font-size: 12px;
-                                        font-family: "Consolas, Courier New, monospace";
+                                    VerticalLayout {
+                                        width: parent.visible-width;
+                                        alignment: start;
+                                        padding: 4px;
+                                        Text {
+                                            text: root.log_text;
+                                            color: #38bdf8;
+                                            font-size: 12px;
+                                            font-family: "Consolas, Courier New, monospace";
+                                            horizontal-alignment: left;
+                                            vertical-alignment: top;
+                                            wrap: word-wrap;
+                                        }
                                     }
                                 }
                             }
