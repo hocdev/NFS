@@ -237,14 +237,36 @@ export component MainWindow inherits Window {
                     height: 100%;
                 }
 
-                // Top-left App Icon
-                Image {
+                // Top-left App Icon (crisp vector, no background halo)
+                Rectangle {
                     x: 4px;
                     y: 7px;
                     width: 32px;
                     height: 32px;
-                    source: @image-url("icons/app.png");
-                    image-fit: contain;
+                    border-radius: 8px;
+                    background: @linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        border-width: 2.2px;
+                        border-color: #ffffff;
+                        background: transparent;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Rectangle {
+                        width: 7px;
+                        height: 7px;
+                        border-radius: 3.5px;
+                        border-width: 2px;
+                        border-color: #ffffff;
+                        background: transparent;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
                 }
 
                 // Centered Cyan Brand Title
