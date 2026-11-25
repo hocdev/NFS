@@ -284,6 +284,8 @@ export component MainWindow inherits Window {
     in-out property <bool> can_clean_flatpak: false;
     in-out property <string> flatpak_savings: "0 MB";
     in-out property <bool> remove_updatepool_office: true;
+    in-out property <string> signing_key_text: "Không ký lại (giữ chữ ký gốc)";
+    in-out property <bool> has_signing_key: false;
 
     in-out property <int> build_progress: 0;
     in-out property <string> build_status: "Sẵn sàng";
@@ -320,6 +322,9 @@ export component MainWindow inherits Window {
     callback export_package_clicked(string);
     callback replace_package_clicked(string);
     callback reset_package_clicked(string);
+    callback select_signing_key_clicked();
+    callback generate_signing_key_clicked();
+    callback clear_signing_key_clicked();
 
     Rectangle {
         width: 100%;
@@ -1519,6 +1524,81 @@ export component MainWindow inherits Window {
                                             color: root.can_clean_flatpak ? #f1f5f9 : #64748b;
                                             font-size: 13px;
                                             vertical-alignment: center;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+
+                                        Text {
+                                            text: "Chữ ký RSA ISO:";
+                                            color: #cbd5e1;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: root.signing_key_text;
+                                            color: root.has_signing_key ? #4ade80 : #94a3b8;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Rectangle {
+                                            height: 26px;
+                                            border-radius: 6px;
+                                            background: sel_key_ta.has-hover ? #334155 : #0f172a;
+                                            border-width: 1px;
+                                            border-color: #475569;
+                                            animate background { duration: 150ms; easing: ease-out; }
+                                            sel_key_ta := TouchArea {
+                                                enabled: !root.is_building;
+                                                mouse-cursor: !root.is_building ? pointer : default;
+                                                clicked => { root.select_signing_key_clicked(); }
+                                            }
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                Text { text: "Chọn .pem..."; color: #e2e8f0; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            height: 26px;
+                                            border-radius: 6px;
+                                            background: gen_key_ta.has-hover ? #1d4ed8 : #2563eb;
+                                            animate background { duration: 150ms; easing: ease-out; }
+                                            gen_key_ta := TouchArea {
+                                                enabled: !root.is_building;
+                                                mouse-cursor: !root.is_building ? pointer : default;
+                                                clicked => { root.generate_signing_key_clicked(); }
+                                            }
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                Text { text: "Tạo khóa RSA..."; color: #ffffff; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                            }
+                                        }
+
+                                        if root.has_signing_key: Rectangle {
+                                            height: 26px;
+                                            border-radius: 6px;
+                                            background: clr_key_ta.has-hover ? #b91c1c : #dc2626;
+                                            animate background { duration: 150ms; easing: ease-out; }
+                                            clr_key_ta := TouchArea {
+                                                enabled: !root.is_building;
+                                                mouse-cursor: !root.is_building ? pointer : default;
+                                                clicked => { root.clear_signing_key_clicked(); }
+                                            }
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                Text { text: "Bỏ"; color: #ffffff; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                                            }
                                         }
                                     }
 

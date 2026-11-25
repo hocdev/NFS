@@ -37,6 +37,7 @@ pub struct Plan {
     pub language_debs: Vec<PathBuf>,
     pub clean_flatpak: bool,
     pub remove_updatepool_office: bool,
+    pub signing_key: Option<PathBuf>,
 }
 
 impl Plan {
@@ -53,6 +54,7 @@ impl Plan {
             language_debs: Vec::new(),
             clean_flatpak: false,
             remove_updatepool_office: true,
+            signing_key: None,
         }
     }
 }

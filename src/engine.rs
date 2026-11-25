@@ -702,6 +702,7 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
         }
         let removal_set: BTreeSet<String> =
             iso_removals.iter().map(|s| s.to_ascii_lowercase()).collect();
+        let mut md5sum_bytes: Option<Vec<u8>> = None;
         for (i, path) in ["/md5sum.txt", "/MD5SUMS"].iter().enumerate() {
             if let Some(old) = source_iso.read_text(path) {
                 let mut new = String::new();
@@ -736,6 +737,9 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
                     }
                 }
                 let local = stage.join(format!("checksum-{i}"));
+                if i == 0 {
+                    md5sum_bytes = Some(new.as_bytes().to_vec());
+                }
                 fs::write(&local, new).map_err(|e| e.to_string())?;
                 // MD5SUMS may itself contain the digest of md5sum.txt.
                 hashes.insert((*path).to_string(), checksum::md5_file(&local)?);
@@ -745,8 +749,35 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
                 });
             }
         }
-        if source_iso.find("/.md5sum.txt").is_some() {
-            log("ISO có chữ ký riêng của nhà phát hành. Chữ ký này không thể được ký lại khi tùy biến; cần thử bộ cài trong VM.");
+        let mut verify_rsa_sig = false;
+        if let Some(key_path) = plan.signing_key.as_ref() {
+            if source_iso.find("/.md5sum.txt").is_some()
+                && source_iso.find("/.public_key.pem").is_some()
+            {
+                let md5_bytes = md5sum_bytes
+                    .as_deref()
+                    .ok_or("ISO không có /md5sum.txt để ký chữ ký RSA")?;
+                progress(62, "Đang ký lại /.md5sum.txt bằng khóa RSA riêng...");
+                let (sig, pub_pem) = crate::rsa_sign::sign_with_pem_file(key_path, md5_bytes)?;
+                let sig_file = stage.join("dot-md5sum.sig");
+                let pub_file = stage.join("public_key.pem");
+                fs::write(&sig_file, &sig).map_err(|e| e.to_string())?;
+                fs::write(&pub_file, pub_pem.as_bytes()).map_err(|e| e.to_string())?;
+                replacements.push(IsoReplacement {
+                    iso_path: "/.md5sum.txt".into(),
+                    local: sig_file,
+                });
+                replacements.push(IsoReplacement {
+                    iso_path: "/.public_key.pem".into(),
+                    local: pub_file,
+                });
+                verify_rsa_sig = true;
+                log("Đã ký lại /.md5sum.txt (RSA PKCS#1 v1.5 SHA-256) và cập nhật /.public_key.pem bằng khóa riêng của bạn.");
+            } else {
+                log("Bỏ qua ký RSA vì ISO nguồn không có sẵn cặp /.md5sum.txt và /.public_key.pem.");
+            }
+        } else if source_iso.find("/.md5sum.txt").is_some() {
+            log("Đã cập nhật /md5sum.txt và /MD5SUMS cho bộ cài. Chữ ký gốc /.md5sum.txt của nhà phát hành không thể ký lại nếu chưa chọn khóa RSA riêng; cần thử bộ cài trong VM.");
         }
         let partial = stage.join("output.iso");
         progress(65, "Đang ghi ISO mới...");
@@ -764,6 +795,7 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             &source_files,
             &replacements,
             &iso_removals,
+            verify_rsa_sig,
         )?;
         let after = fs::metadata(&plan.image.path).map_err(|e| e.to_string())?;
         if source_meta.len() != after.len() || source_meta.modified().ok() != after.modified().ok()
@@ -894,6 +926,7 @@ fn verify_iso(
     files: &[(String, Extent)],
     replacements: &[IsoReplacement],
     removals: &[String],
+    verify_rsa_sig: bool,
 ) -> Result<()> {
     let mut iso = IsoReader::new(target).map_err(|e| e.to_string())?;
     let output_files = iso.files()?;
@@ -937,6 +970,21 @@ fn verify_iso(
             }
             compare(&mut a, old.offset, &mut b, new.offset, old.size)?;
         }
+    }
+    if verify_rsa_sig {
+        let mut read_out = |path: &str| -> Result<Vec<u8>> {
+            let ext = iso
+                .find(path)
+                .ok_or_else(|| format!("Mất tệp chữ ký ISO: {path}"))?;
+            let mut buf = vec![0u8; ext.size as usize];
+            b.seek(SeekFrom::Start(ext.offset)).map_err(|e| e.to_string())?;
+            b.read_exact(&mut buf).map_err(|e| e.to_string())?;
+            Ok(buf)
+        };
+        let md5_data = read_out("/md5sum.txt")?;
+        let sig_data = read_out("/.md5sum.txt")?;
+        let pub_pem = read_out("/.public_key.pem")?;
+        crate::rsa_sign::verify_with_pem_bytes(&pub_pem, &md5_data, &sig_data)?;
     }
     Ok(())
 }

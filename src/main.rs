@@ -16,6 +16,7 @@ mod iso;
 mod language;
 mod language_payload;
 mod locale_registry;
+mod rsa_sign;
 mod scan_cache;
 mod squash;
 mod types;
@@ -350,7 +351,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
     if args.get(1).is_some_and(|s| s == "--help" || s == "-h") {
-        println!("ISOLite\ninspect <input.iso>\nextract <input.iso> <folder>\nbuild <input.iso> <output.iso> [--locale vi_VN.UTF-8] [--default-locale vi_VN.UTF-8] [--remove package] [--deb file.deb] [--language-deb file.deb]");
+        println!("ISOLite\ninspect <input.iso>\nextract <input.iso> <folder>\nbuild <input.iso> <output.iso> [--locale vi_VN.UTF-8] [--default-locale vi_VN.UTF-8] [--remove package] [--deb file.deb] [--language-deb file.deb] [--sign-key private.pem]");
         return Ok(());
     }
     // CLI Mode
@@ -415,6 +416,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 clean_flatpak: false,
                 remove_updatepool_office: true,
                 replaced_folders: BTreeMap::new(),
+                signing_key: None,
             };
 
             let mut i = 4;
@@ -449,6 +451,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             i += 1;
                         }
                     }
+                    "--sign-key" => {
+                        let value = args.get(i + 1).ok_or("Thiếu đường dẫn tệp khóa RSA (.pem)")?;
+                        plan.signing_key = Some(PathBuf::from(value));
+                        i += 1;
+                    }
                     _ => return Err(format!("Tùy chọn không hỗ trợ: {}", args[i]).into()),
                 }
                 i += 1;
@@ -474,6 +481,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let selected_removals = Arc::new(Mutex::new(BTreeSet::<String>::new()));
     let selected_languages = Arc::new(Mutex::new(BTreeSet::<String>::new()));
     let replaced_folders = Arc::new(Mutex::new(BTreeMap::<String, PathBuf>::new()));
+    let signing_key = Arc::new(Mutex::new(Option::<PathBuf>::None));
     let sort_column = Arc::new(Mutex::new(0i32));
     let sort_ascending = Arc::new(Mutex::new(true));
     // 1. Open ISO
@@ -1041,6 +1049,106 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // 11b. Signing Key (RSA-2048 PEM)
+    {
+        let ui_weak = ui_handle.clone();
+        let signing_key = signing_key.clone();
+        main_window.on_select_signing_key_clicked(move || {
+            if let Some(path) = dialog::FileDialog::new()
+                .add_filter("Khóa riêng RSA (.pem)", &["pem"])
+                .pick_file()
+            {
+                let valid = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("Không đọc được tệp khóa: {e}"))
+                    .and_then(|pem| rsa_sign::RsaPrivateKey::from_pem(&pem).map(|_| ()));
+                if let Some(ui) = ui_weak.upgrade() {
+                    match valid {
+                        Ok(()) => {
+                            let label = path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| path.display().to_string());
+                            *signing_key.lock().unwrap() = Some(path.clone());
+                            ui.set_signing_key_text(label.into());
+                            ui.set_has_signing_key(true);
+                            let mut log = ui.get_log_text().to_string();
+                            log += &format!("🔑 Đã chọn khóa ký RSA: {}\n", path.display());
+                            ui.set_log_text(log.into());
+                            ui.set_status_bar_text("Đã chọn khóa ký RSA cho ISO.".into());
+                        }
+                        Err(e) => {
+                            let mut log = ui.get_log_text().to_string();
+                            log += &format!("❌ Khóa RSA không hợp lệ: {e}\n");
+                            ui.set_log_text(log.into());
+                            ui.set_status_bar_text(format!("Lỗi khóa RSA: {e}").into());
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui_handle.clone();
+        let signing_key = signing_key.clone();
+        main_window.on_generate_signing_key_clicked(move || {
+            if let Some(dest) = dialog::FileDialog::new()
+                .add_filter("Khóa riêng RSA (.pem)", &["pem"])
+                .set_file_name("isolite-signing.pem")
+                .save_file()
+            {
+                let res = rsa_sign::generate_rsa_2048_pem().and_then(|priv_pem| {
+                    let key = rsa_sign::RsaPrivateKey::from_pem(&priv_pem)?;
+                    let pub_pem = key.public_key().to_spki_pem();
+                    std::fs::write(&dest, priv_pem.as_bytes()).map_err(|e| e.to_string())?;
+                    let pub_path = dest.with_extension("pub.pem");
+                    std::fs::write(&pub_path, pub_pem.as_bytes()).map_err(|e| e.to_string())?;
+                    Ok(pub_path)
+                });
+                if let Some(ui) = ui_weak.upgrade() {
+                    match res {
+                        Ok(pub_path) => {
+                            let label = dest
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| dest.display().to_string());
+                            *signing_key.lock().unwrap() = Some(dest.clone());
+                            ui.set_signing_key_text(label.into());
+                            ui.set_has_signing_key(true);
+                            let mut log = ui.get_log_text().to_string();
+                            log += &format!(
+                                "🔑 Đã tạo cặp khóa RSA-2048 mới:\n  - Khóa riêng: {}\n  - Khóa công khai: {}\n",
+                                dest.display(),
+                                pub_path.display()
+                            );
+                            ui.set_log_text(log.into());
+                            ui.set_status_bar_text("Đã tạo và chọn khóa ký RSA-2048 mới.".into());
+                        }
+                        Err(e) => {
+                            let mut log = ui.get_log_text().to_string();
+                            log += &format!("❌ Không tạo được khóa RSA: {e}\n");
+                            ui.set_log_text(log.into());
+                            ui.set_status_bar_text(format!("Lỗi tạo khóa: {e}").into());
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    {
+        let ui_weak = ui_handle.clone();
+        let signing_key = signing_key.clone();
+        main_window.on_clear_signing_key_clicked(move || {
+            *signing_key.lock().unwrap() = None;
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_has_signing_key(false);
+                ui.set_signing_key_text("Không ký lại (giữ chữ ký gốc)".into());
+                ui.set_status_bar_text("Đã bỏ chọn khóa ký RSA.".into());
+            }
+        });
+    }
+
     // 12. Build ISO Action
     {
         let ui_weak = ui_handle.clone();
@@ -1049,6 +1157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let selected_removals = selected_removals.clone();
         let selected_languages = selected_languages.clone();
         let replaced_folders = replaced_folders.clone();
+        let signing_key = signing_key.clone();
 
         main_window.on_build_iso_clicked(move || {
             let cur = current_image.lock().unwrap().clone();
@@ -1105,6 +1214,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             clean_flatpak,
                             remove_updatepool_office,
                             replaced_folders: replace_map,
+                            signing_key: signing_key.lock().unwrap().clone(),
                         };
 
                         std::thread::spawn(move || {
