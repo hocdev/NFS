@@ -25,7 +25,7 @@ fn location(path: &Path) -> Option<PathBuf> {
         f.read_exact(&mut sample[n..]).ok()?;
     }
     let key = format!(
-        "7|{}|{}|{}|{}",
+        "8|{}|{}|{}|{}",
         canonical.display(),
         meta.len(),
         time,
@@ -38,7 +38,7 @@ fn location(path: &Path) -> Option<PathBuf> {
     let root = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("ISOLite/scan-v7");
+        .join("ISOLite/scan-v8");
     Some(root.join(format!("{hash:016x}.bin")))
 }
 fn string(out: &mut Vec<u8>, s: &str) {
@@ -66,7 +66,7 @@ fn encode(image: &Image) -> Vec<u8> {
         out.push(u8::from(p.protected_package));
         out.extend_from_slice(&p.installed_kib.unwrap_or(u64::MAX).to_le_bytes());
     }
-    let mut all = b"ISC7".to_vec();
+    let mut all = b"ISC8".to_vec();
     all.extend_from_slice(&crate::xz::crc32(&out).to_le_bytes());
     all.extend(out);
     all
@@ -97,7 +97,7 @@ impl<'a> Decoder<'a> {
 }
 fn decode(path: &Path, bytes: &[u8]) -> Option<Image> {
     if bytes.len() < 8
-        || &bytes[..4] != b"ISC7"
+        || &bytes[..4] != b"ISC8"
         || crate::xz::crc32(&bytes[8..]) != u32::from_le_bytes(bytes[4..8].try_into().ok()?)
     {
         return None;

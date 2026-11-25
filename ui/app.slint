@@ -1741,8 +1741,8 @@ export component MainWindow inherits Window {
                                     AppComboBox { width: 310px; height: 36px; model: root.locale_labels; current-index <=> root.language_index; enabled: root.iso_loaded && !root.is_building; }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
                                 }
-                                Text { text: "Chọn Tiếng Anh để ISO mới khởi động bằng tiếng Anh thay cho tiếng Trung."; color: #94a3b8; font-size: 12px; wrap: word-wrap; }
-                                Text { text: "Thiết lập này được ghi sẵn vào ISO; không có màn hình chọn ngôn ngữ khi boot."; color: #34d399; font-size: 11px; }
+                                Text { text: "Chọn ngôn ngữ mặc định (ví dụ Tiếng Việt hoặc Tiếng Anh) để cả chế độ Live và hệ thống sau cài đặt khởi động bằng ngôn ngữ đó."; color: #94a3b8; font-size: 12px; wrap: word-wrap; }
+                                Text { text: "Áp dụng cho cả GRUB (UEFI), ISOLINUX (BIOS), live-config và sau khi cài; không có màn hình hỏi lúc boot."; color: #34d399; font-size: 11px; }
                             }
                         }
                         HorizontalLayout { height: 36px; spacing: 12px;

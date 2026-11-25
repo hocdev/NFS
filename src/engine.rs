@@ -52,6 +52,20 @@ fn indexed_text(fs: &mut Squash, paths: &BTreeMap<String, Node>, path: &str) -> 
         text(fs, path)
     }
 }
+fn is_optional_vendor_app(name: &str) -> bool {
+    matches!(
+        name,
+        "nfs-domain-client"
+            | "nfs-security"
+            | "nfs-devicemanager"
+            | "nfs-appstore"
+            | "nfs-cloud-sync"
+            | "nfs-moboplayer"
+            | "nfs-screenshot"
+            | "nfs-file-compress"
+    )
+}
+
 fn inventory(fs: &mut Squash, paths: &BTreeMap<String, Node>) -> Result<Inventory> {
     let status = indexed_text(fs, paths, "var/lib/dpkg/status")
         .ok_or("ISO không có cơ sở dữ liệu dpkg được hỗ trợ")?;
@@ -118,7 +132,8 @@ fn inventory(fs: &mut Squash, paths: &BTreeMap<String, Node>) -> Result<Inventor
                     }
                 }
             }
-            if path.ends_with(".service")
+            let is_dbus_service = path.starts_with("usr/share/dbus-1/services/");
+            if (path.ends_with(".service") && !is_dbus_service && !is_optional_vendor_app(name))
                 || path.starts_with("usr/share/xsessions/")
                 || path.starts_with("usr/share/wayland-sessions/")
                 || path.starts_with("boot/")
@@ -431,6 +446,22 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             }
         }
         if !plan.remove.is_empty() {
+            let removed_services: Vec<String> = removed
+                .iter()
+                .filter(|p| p.ends_with(".service"))
+                .filter_map(|p| p.rsplit('/').next().map(|s| format!("/{s}")))
+                .collect();
+            if !removed_services.is_empty() {
+                for (path, node) in &paths {
+                    if path.starts_with("etc/systemd/") {
+                        if let Kind::Link(target) = &node.kind {
+                            if removed_services.iter().any(|svc| target.ends_with(svc)) {
+                                removed.insert(path.clone());
+                            }
+                        }
+                    }
+                }
+            }
             let status = text(&mut squash, "var/lib/dpkg/status").ok_or("Missing dpkg status")?;
             let status = status
                 .split("\n\n")
@@ -512,6 +543,33 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
                     language::set_language(&old, locale).into_bytes(),
                 );
             }
+            added.insert(
+                "etc/live/config.conf.d/99-isolite-locale.conf".into(),
+                language::live_config_locale(locale).into_bytes(),
+            );
+            let session_script = language::session_locale_script(locale).into_bytes();
+            added.insert("etc/profile.d/99-isolite-locale.sh".into(), session_script.clone());
+            added.insert("etc/X11/Xsession.d/99isolite-locale".into(), session_script);
+            if let Some(hook) = indexed_text(&mut squash, &paths, "usr/lib/live/config/0050-locales")
+            {
+                let target_line = "echo \"LANG=${_LOCALE}\" > /etc/default/locale";
+                if hook.contains(target_line) {
+                    let priority = language::language_priority(locale);
+                    let patched_hook = hook.replace(
+                        target_line,
+                        &format!(
+                            "printf \"LANG=%s\\nLANGUAGE=%s\\n\" \"${{_LOCALE}}\" \"{priority}\" > /etc/default/locale\n\tprintf \"LANG=%s\\nLANGUAGE=%s\\n\" \"${{_LOCALE}}\" \"{priority}\" > /etc/locale.conf"
+                        ),
+                    );
+                    added.insert(
+                        "usr/lib/live/config/0050-locales".into(),
+                        patched_hook.into_bytes(),
+                    );
+                }
+            }
+            log(&format!(
+                "Đã cấu hình ngôn ngữ mặc định {locale} cho cả chế độ Live (live-config/GRUB/ISOLINUX) và hệ thống sau cài đặt."
+            ));
         }
         if plan.image.release != plan.original_release {
             for path in ["etc/os-release", "usr/lib/os-release"] {

@@ -77,13 +77,17 @@ pub fn set_language(original: &str, locale: &str) -> String {
     output
 }
 
-/// Patch both GRUB's linux lines and ISOLINUX's append lines, including installer entries.
+/// Patch both GRUB's linux/linuxefi lines and ISOLINUX's APPEND/append lines, including installer entries.
 pub fn patch_boot_config(original: &str, locale: &str) -> String {
     let mut output = String::new();
     for line in original.split_inclusive('\n') {
         let trimmed = line.trim_start();
         let command = trimmed.split_whitespace().next().unwrap_or("");
-        if !matches!(command, "linux" | "linuxefi" | "append") || !line.contains("boot=live") {
+        if !matches!(
+            command.to_ascii_lowercase().as_str(),
+            "linux" | "linuxefi" | "append"
+        ) || !line.contains("boot=live")
+        {
             output.push_str(line);
             continue;
         }
@@ -109,6 +113,20 @@ pub fn patch_boot_config(original: &str, locale: &str) -> String {
         }
     }
     output
+}
+
+pub fn live_config_locale(locale: &str) -> String {
+    format!(
+        "LIVE_LOCALES=\"{locale}\"\nexport LANG=\"{locale}\"\nexport LANGUAGE=\"{}\"\n",
+        language_priority(locale)
+    )
+}
+
+pub fn session_locale_script(locale: &str) -> String {
+    format!(
+        "export LANG={locale}\nexport LANGUAGE={}\n",
+        language_priority(locale)
+    )
 }
 
 #[cfg(test)]
@@ -147,12 +165,13 @@ mod tests {
 
     #[test]
     fn patches_live_and_installer_boot_without_changing_other_entries() {
-        let original = "# locales=zh_CN.UTF-8\n linux /live/vmlinuz boot=live locales=zh_CN.UTF-8 quiet\n append boot=live only-installer\n linux /vmlinuz root=/dev/sda1\n";
-        let patched = patch_boot_config(original, "en_US.UTF-8");
-        assert!(patched.contains("boot=live locales=en_US.UTF-8 quiet"));
-        assert!(patched.contains("boot=live only-installer locales=en_US.UTF-8"));
+        let original = "# locales=zh_CN.UTF-8\n linux /live/vmlinuz boot=live locales=zh_CN.UTF-8 quiet\n  APPEND initrd=/live/initrd.img boot=live components locales=zh_CN.UTF-8 quiet splash\n append boot=live only-installer\n linux /vmlinuz root=/dev/sda1\n";
+        let patched = patch_boot_config(original, "vi_VN.UTF-8");
+        assert!(patched.contains("boot=live locales=vi_VN.UTF-8 quiet"));
+        assert!(patched.contains("APPEND initrd=/live/initrd.img boot=live components locales=vi_VN.UTF-8 quiet splash"));
+        assert!(patched.contains("boot=live only-installer locales=vi_VN.UTF-8"));
         assert!(patched.contains("linux /vmlinuz root=/dev/sda1\n"));
         assert!(patched.starts_with("# locales=zh_CN.UTF-8"));
-        assert_eq!(patch_boot_config(&patched, "en_US.UTF-8"), patched);
+        assert_eq!(patch_boot_config(&patched, "vi_VN.UTF-8"), patched);
     }
 }
