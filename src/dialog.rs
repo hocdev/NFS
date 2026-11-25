@@ -52,6 +52,14 @@ impl FileDialog {
             return None;
         }
         buffer[..initial.len()].copy_from_slice(&initial);
+        let default_ext: Option<Vec<u16>> = if save {
+            self.filters
+                .first()
+                .and_then(|(_, exts)| exts.first())
+                .map(|ext| ext.encode_utf16().chain([0]).collect())
+        } else {
+            None
+        };
         let mut filter = Vec::new();
         for (label, extensions) in self.filters {
             filter.extend(label.encode_utf16());
@@ -75,6 +83,9 @@ impl FileDialog {
         ofn.file = buffer.as_mut_ptr();
         ofn.max_file = buffer.len() as u32;
         ofn.title = title.as_ptr();
+        if let Some(ref ext) = default_ext {
+            ofn.default_ext = ext.as_ptr();
+        }
         ofn.flags =
             0x80000 | 0x800 | 8 | if save { 2 } else { 0x1000 } | if multi { 0x200 } else { 0 };
         let ok = unsafe {

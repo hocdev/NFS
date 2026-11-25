@@ -165,6 +165,32 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+fn suggested_iso_filename(release: &str) -> String {
+    let cleaned: String = release
+        .trim()
+        .chars()
+        .map(|c| {
+            if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control()
+            {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches([' ', '.']);
+    let stem = if trimmed.is_empty() {
+        "custom-linux"
+    } else {
+        trimmed
+    };
+    if stem.to_ascii_lowercase().ends_with(".iso") {
+        stem.to_string()
+    } else {
+        format!("{stem}.iso")
+    }
+}
+
 fn format_kib(kib: Option<u64>) -> String {
     match kib {
         Some(k) => {
@@ -1027,9 +1053,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         main_window.on_build_iso_clicked(move || {
             let cur = current_image.lock().unwrap().clone();
             if let Some(img) = cur {
+                let default_name = ui_weak
+                    .upgrade()
+                    .map(|ui| suggested_iso_filename(&ui.get_iso_release_text()))
+                    .unwrap_or_else(|| suggested_iso_filename(&img.release));
                 let dest_opt = dialog::FileDialog::new()
                     .add_filter("Ảnh đĩa ISO", &["iso"])
-                    .set_file_name("custom-linux.iso")
+                    .set_file_name(&default_name)
                     .save_file();
 
                 if let Some(dest_iso) = dest_opt {
@@ -1192,4 +1222,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     slint::run_event_loop()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::suggested_iso_filename;
+
+    #[test]
+    fn suggested_iso_filename_uses_and_sanitizes_release_name() {
+        assert_eq!(
+            suggested_iso_filename("NFS Desktop OS V6.0"),
+            "NFS Desktop OS V6.0.iso"
+        );
+        assert_eq!(
+            suggested_iso_filename("  custom/os:v1*  "),
+            "custom-os-v1-.iso"
+        );
+        assert_eq!(suggested_iso_filename("   "), "custom-linux.iso");
+        assert_eq!(suggested_iso_filename("my-distro.ISO"), "my-distro.ISO");
+    }
 }
