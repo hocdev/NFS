@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=LiveCD Repair Tool
-Name[zh_CN]=LiveCD Repair Tool
-Comment[zh_CN]=LiveCD System Repair Tool
+Name[en]=LiveCD Repair Tool
+Comment[en]=LiveCD System Repair Tool
 Comment=LiveCD System Repair Tool
 Categories=System
 Exec=/usr/share/nfs-livecd-tools/bin/nfs-livecd-tools

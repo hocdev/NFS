@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Exec=/usr/share/nfs-domain-client/nfs-domain-client
+Name=NFS Domain Client
+GenericName=domain
+Icon=/usr/share/icons/domain.png
+Terminal=false
+Categories=System;
+Uninstall=no;

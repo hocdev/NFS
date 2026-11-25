@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=com.nfs.domain.session
+Exec=/usr/bin/systemctl --user restart nfs-domain-session.service
+

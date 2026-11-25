@@ -1,0 +1,11 @@
+/var/log/nfs-domain-client/nfs-domain-session-agent.log
+/var/log/nfs-domain-client/nfs-domain-agent.log
+/var/log/nfs-domain-client/nfs-domain-client.log {
+	rotate 4
+	weekly
+	missingok
+	notifempty
+	size 50M
+	compress
+	create 666 root root
+}

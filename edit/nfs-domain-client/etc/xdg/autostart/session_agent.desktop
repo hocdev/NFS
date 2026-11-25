@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=nfs-domain-session-agent
+Name[en]=NFS Domain Service
+Type=Application
+Icon=nfs-domain-session
+Exec=/usr/share/nfs-domain-client/start_session_agent.sh
+
