@@ -1,8 +1,8 @@
 #!/bin/bash
-#有磁盘加密先解密
+#decrypt it first
 cryptLine=$(blkid | grep crypto_LUKS)
 if [ -n "$cryptLine" ];then
-    password=$(kdialog --password "有磁盘被加密，请输入密码")
+    password=$(kdialog --password "Encrypted disk detected, please enter password")
     cryptDisks=$(blkid | grep crypto_LUKS | awk -F: '{print $1}')
     for disk in $cryptDisks
     do
@@ -17,7 +17,7 @@ ARCH=$(arch)
 probeResult=$(os-prober | grep nfsdesktop | grep -v backup)
 if [ -z "$probeResult" ];then
 	if [ -z "$1" ];then
-    	echo "磁盘中没有linux系统"
+    	echo "No Linux system found on disk"
     	exit 1
     else
     	probeResult="$1"
@@ -29,7 +29,7 @@ echo ospartition $ospartition
 osname=$(echo $probeResult | awk -F: '{ print $3 }')
 echo osname $osname
 #if [ $osname != nfsdesktop ];then
-#    echo "不是方德系统"
+#    echo "Not the Fangde system"
 #fi
 rootMountPoint="/tmp/root-nfs"
 isEfi=false
@@ -155,4 +155,4 @@ else
     chroot $rootMountPoint cp /boot/grub/grub.cfg /boot/efi/EFI/BOOT/
 fi
 umountSystem
-echo "修复完成"
+echo "Repair completed"
