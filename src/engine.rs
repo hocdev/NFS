@@ -309,6 +309,14 @@ pub fn export_package_files<F: Fn(&str)>(
     dest: &Path,
     log: F,
 ) -> Result<()> {
+    let target_root = if dest
+        .file_name()
+        .is_some_and(|n| n == std::ffi::OsStr::new(name))
+    {
+        dest.to_path_buf()
+    } else {
+        dest.join(name)
+    };
     let mut fs = Squash::open(&image.path, image.squash_offset)?;
     let paths = fs.paths()?;
     let inv = inventory(&mut fs, &paths)?;
@@ -321,7 +329,7 @@ pub fn export_package_files<F: Fn(&str)>(
         }
         if let Some(node) = paths.get(path) {
             if matches!(node.kind, Kind::File { .. }) {
-                let target = dest.join(path);
+                let target = target_root.join(path);
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
@@ -329,8 +337,66 @@ pub fn export_package_files<F: Fn(&str)>(
             }
         }
     }
-    log("Đã xuất tệp thường; liên kết và quyền Linux chỉ được bảo toàn trong ISO.");
+    log(&format!(
+        "Đã xuất tệp gói {name} vào: {} (liên kết và quyền Linux chỉ được bảo toàn trong ISO).",
+        target_root.display()
+    ));
     Ok(())
+}
+
+pub fn validate_package_replacement(image: &Image, name: &str, folder: &Path) -> Result<usize> {
+    if !folder.is_dir() {
+        return Err(format!("Không tìm thấy thư mục: {}", folder.display()));
+    }
+    let mut files = BTreeMap::new();
+    collect_overlay(folder, folder, &mut files)?;
+    if files.is_empty() {
+        return Err(format!(
+            "Thư mục đã chọn đang trống, không có tệp nào để thay thế cho gói {name}."
+        ));
+    }
+    let mut fs = Squash::open(&image.path, image.squash_offset)?;
+    let list_text = text(&mut fs, &format!("var/lib/dpkg/info/{name}.list"))
+        .or_else(|| {
+            (!image.architecture.is_empty())
+                .then(|| {
+                    text(
+                        &mut fs,
+                        &format!("var/lib/dpkg/info/{name}:{}.list", image.architecture),
+                    )
+                })
+                .flatten()
+        })
+        .ok_or_else(|| format!("Không tìm thấy danh sách tệp của gói {name} trong ISO."))?;
+    let owned: BTreeSet<String> = list_text
+        .lines()
+        .map(|l| l.trim().trim_start_matches('/').to_owned())
+        .filter(|l| !l.is_empty() && l != ".")
+        .collect();
+    let matched = files.keys().filter(|p| owned.contains(*p)).count();
+    if matched == 0 {
+        let nested = folder.join(name);
+        if nested.is_dir() {
+            let mut sub_files = BTreeMap::new();
+            if collect_overlay(&nested, &nested, &mut sub_files).is_ok()
+                && sub_files.keys().any(|p| owned.contains(p))
+            {
+                return Err(format!(
+                    "Sai đường dẫn cho gói {name}: bạn đang chọn thư mục cha. Hãy chọn thẳng thư mục con \"{}\".",
+                    nested.display()
+                ));
+            }
+        }
+        let example = owned
+            .iter()
+            .find(|p| p.contains('/') && !p.starts_with("var/lib/dpkg"))
+            .map(String::as_str)
+            .unwrap_or("usr/...");
+        return Err(format!(
+            "Thư mục đã chọn không khớp cấu trúc tệp của gói {name} (cần chứa đúng cấu trúc gốc, ví dụ: {example})."
+        ));
+    }
+    Ok(matched)
 }
 fn validate_removals(inv: &Inventory, remove: &BTreeSet<String>) -> Result<()> {
     for name in remove {
@@ -484,7 +550,8 @@ pub fn build_iso<L: Fn(&str), P: Fn(i32, &str)>(
             }
         }
         for (name, folder) in &plan.replaced_folders {
-            log(&format!("Áp dụng tệp thay thế: {name}"));
+            let matched = validate_package_replacement(&plan.image, name, folder)?;
+            log(&format!("Áp dụng tệp thay thế cho {name} ({matched} tệp khớp gốc)"));
             collect_overlay(folder, folder, &mut added)?;
         }
         let mut branding_iso_files: BTreeMap<String, Vec<u8>> = BTreeMap::new();

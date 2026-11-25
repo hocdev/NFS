@@ -206,3 +206,27 @@ extern "system" {
     fn CoInitializeEx(reserved: *mut std::ffi::c_void, flags: u32) -> i32;
     fn CoTaskMemFree(value: *mut std::ffi::c_void);
 }
+#[cfg(windows)]
+#[link(name = "user32")]
+extern "system" {
+    fn MessageBoxW(
+        hwnd: *mut std::ffi::c_void,
+        text: *const u16,
+        caption: *const u16,
+        kind: u32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+pub fn alert_error(title: &str, message: &str) {
+    let t: Vec<u16> = title.encode_utf16().chain([0]).collect();
+    let m: Vec<u16> = message.encode_utf16().chain([0]).collect();
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), m.as_ptr(), t.as_ptr(), 0x0000_0010);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn alert_error(_title: &str, message: &str) {
+    eprintln!("{message}");
+}

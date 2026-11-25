@@ -386,7 +386,8 @@ pub fn repack_iso(
     const EXTENT_LIMIT: u64 = 0xfffff800;
     let mut erased: BTreeMap<u64, BTreeSet<usize>> = BTreeMap::new();
 
-    // Handle any replacements located before movable_boundary
+    // Handle any replacements located before movable_boundary (relocate if larger than old_sectors)
+    let mut relocated_keys: BTreeSet<String> = BTreeSet::new();
     for (path, edit) in &edits {
         if edit.old_start < movable_boundary && !edit.local.as_os_str().is_empty() {
             let size = fs::metadata(&edit.local)
@@ -395,7 +396,14 @@ pub fn repack_iso(
             let sectors = (size + ISO_SECTOR - 1) / ISO_SECTOR;
             let old_sectors = (edit.old_bytes + ISO_SECTOR - 1) / ISO_SECTOR;
             if sectors > old_sectors {
-                return Err(format!("Tệp {} vượt quá dung lượng cũ trước movable_boundary", path));
+                if boot_sectors.contains(&edit.old_start) {
+                    return Err(format!(
+                        "Tệp boot {} vượt quá dung lượng cũ trước movable_boundary",
+                        path
+                    ));
+                }
+                relocated_keys.insert(path.clone());
+                continue;
             }
             let mut repl_file = File::open(&edit.local)
                 .map_err(|e| format!("Cannot open {}: {}", edit.local.display(), e))?;
@@ -424,7 +432,7 @@ pub fn repack_iso(
 
     let mut movable_files: Vec<(&String, &Edit)> = edits
         .iter()
-        .filter(|(_, edit)| edit.old_start >= movable_boundary)
+        .filter(|(path, edit)| edit.old_start >= movable_boundary || relocated_keys.contains(*path))
         .collect();
     movable_files.sort_by_key(|(_, edit)| edit.old_start);
 

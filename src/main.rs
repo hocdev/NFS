@@ -882,6 +882,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Replace package with folder
     {
         let ui_weak = ui_handle.clone();
+        let current_image = current_image.clone();
         let all_packages = all_packages.clone();
         let selected_removals = selected_removals.clone();
         let replaced_folders = replaced_folders.clone();
@@ -889,6 +890,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sort_ascending = sort_ascending.clone();
         main_window.on_replace_package_clicked(move |pkg_name| {
             let pkg_str = pkg_name.to_string();
+            let cur_img = current_image.lock().unwrap().clone();
+            let Some(img) = cur_img else {
+                return;
+            };
             let dir_opt = dialog::FileDialog::new()
                 .set_title(&format!(
                     "Chọn thư mục chứa tệp thay thế cho gói {}",
@@ -896,36 +901,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ))
                 .pick_folder();
             if let Some(dir) = dir_opt {
-                {
-                    let mut reps = replaced_folders.lock().unwrap();
-                    reps.insert(pkg_str.clone(), dir.clone());
-                }
-                if let Some(ui) = ui_weak.upgrade() {
-                    let pkgs = all_packages.lock().unwrap();
-                    let removals = selected_removals.lock().unwrap();
-                    let reps = replaced_folders.lock().unwrap();
-                    let sc = *sort_column.lock().unwrap();
-                    let sa = *sort_ascending.lock().unwrap();
-                    apply_package_filter(
-                        &ui,
-                        &pkgs,
-                        &removals,
-                        &reps,
-                        ui.get_package_tab(),
-                        &ui.get_search_text(),
-                        sc,
-                        sa,
-                    );
-                    let mut cur_log = ui.get_log_text().to_string();
-                    cur_log += &format!(
-                        "Đã đặt thư mục thay thế cho {}: {}\n",
-                        pkg_str,
-                        dir.display()
-                    );
-                    ui.set_log_text(cur_log.into());
-                    ui.set_status_bar_text(
-                        format!("Đã gán thư mục thay thế cho gói {}", pkg_str).into(),
-                    );
+                match engine::validate_package_replacement(&img, &pkg_str, &dir) {
+                    Ok(matched) => {
+                        {
+                            let mut reps = replaced_folders.lock().unwrap();
+                            reps.insert(pkg_str.clone(), dir.clone());
+                        }
+                        if let Some(ui) = ui_weak.upgrade() {
+                            let pkgs = all_packages.lock().unwrap();
+                            let removals = selected_removals.lock().unwrap();
+                            let reps = replaced_folders.lock().unwrap();
+                            let sc = *sort_column.lock().unwrap();
+                            let sa = *sort_ascending.lock().unwrap();
+                            apply_package_filter(
+                                &ui,
+                                &pkgs,
+                                &removals,
+                                &reps,
+                                ui.get_package_tab(),
+                                &ui.get_search_text(),
+                                sc,
+                                sa,
+                            );
+                            let mut cur_log = ui.get_log_text().to_string();
+                            cur_log += &format!(
+                                "Đã đặt thư mục thay thế cho {} ({} tệp khớp): {}\n",
+                                pkg_str,
+                                matched,
+                                dir.display()
+                            );
+                            ui.set_log_text(cur_log.into());
+                            ui.set_status_bar_text(
+                                format!("Đã gán thư mục thay thế cho gói {}", pkg_str).into(),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        dialog::alert_error("Đường dẫn thay thế không hợp lệ", &err);
+                        if let Some(ui) = ui_weak.upgrade() {
+                            let mut cur_log = ui.get_log_text().to_string();
+                            cur_log += &format!("❌ {}\n", err);
+                            ui.set_log_text(cur_log.into());
+                            ui.set_status_bar_text(format!("Sai đường dẫn gói {}", pkg_str).into());
+                        }
+                    }
                 }
             }
         });
