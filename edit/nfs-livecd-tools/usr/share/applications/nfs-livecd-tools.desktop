@@ -1,8 +1,8 @@
 [Desktop Entry]
-Name=LiveCD Repair Tool
-Name[zh_CN]=LiveCD Repair Tool
-Comment[zh_CN]=LiveCD System Repair Tool
-Comment=LiveCD System Repair Tool
+Name=LiveCD-Tools
+Name[zh_CN]=LiveCD修复工具
+Comment[zh_CN]=LiveCD修复工具
+Comment=LiveCD修复工具 
 Categories=System
 Exec=/usr/share/nfs-livecd-tools/bin/nfs-livecd-tools
 Icon=/usr/share/pixmaps/livecd_tools.png
